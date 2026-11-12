@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "Дитяча казка",
+    "slug": "cazka",
+    "scheme": "cazka",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ]
+  }
+}
