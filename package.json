@@ -1,0 +1,26 @@
+{
+  "name": "dytyacha-kazka",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo/AppEntry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "expo": "~54.0.0",
+    "expo-status-bar": "~3.0.9",
+    "expo-speech": "~14.0.7",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "react": "19.1.0",
+    "react-native": "0.81.4",
+    "react-dom": "19.1.0",
+    "react-native-web": "^0.21.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.2",
+    "@types/react": "~19.1.10"
+  }
+}
