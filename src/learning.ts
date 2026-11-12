@@ -21,5 +21,11 @@ export function makeMathTask(max=10,count=3,random=Math.random):MathTask {
 export function normalizeAnswer(value:string):number|null {
  const clean=value.trim().toLowerCase();
  const n=Number(clean); if(clean!==''&&Number.isInteger(n)) return n;
- const index=words.indexOf(clean.replace("'",'’'));return index>=0?index:null;
+ const normalized=clean.replace(/[’'`ʼ]/g,'’').replace(/[.!?]/g,'').trim();
+ const extra=['одинадцять','дванадцять','тринадцять','чотирнадцять','п’ятнадцять','шістнадцять','сімнадцять','вісімнадцять','дев’ятнадцять'];
+ const index=words.indexOf(normalized);if(index>=0)return index;
+ const teen=extra.indexOf(normalized);if(teen>=0)return teen+11;
+ if(normalized==='двадцять')return 20;if(normalized==='тридцять')return 30;
+ if(normalized.startsWith('двадцять ')){const unit=words.indexOf(normalized.slice(9));if(unit>0)return 20+unit;}
+ return null;
 }

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 
 /**
@@ -10,6 +10,7 @@ export function useVoiceInput() {
   const [listening, setListening] = useState(false);
   const [error, setError] = useState('');
   const recognition = useRef<any>(null);
+  useEffect(() => () => recognition.current?.abort(), []);
   const supported = Platform.OS === 'web' && typeof (globalThis as any).SpeechRecognition !== 'undefined' ||
     Platform.OS === 'web' && typeof (globalThis as any).webkitSpeechRecognition !== 'undefined';
   const listen = (onResult: (text: string) => void) => {
