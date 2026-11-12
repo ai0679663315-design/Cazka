@@ -10,6 +10,7 @@ import { STORIES, INTERESTS, nextStory, storyById, fillName, Story } from './src
 import { Profile, Result, ResultKind, PROFILE_KEY, SETTINGS_KEY, migrate, newProfile, readingLevel } from './src/profile';
 import { Button, Celebrate, ExitLink, MathCard, ReadingCard, Tone } from './src/components';
 import { hasUkrainianVoice, playTone, unlockOnFirstTouch } from './src/webExtras';
+import { VoiceInfo, configureSpeech, currentVoice, loadVoices, speak } from './src/speech';
 import { StoryPlayer } from './src/StoryPlayer';
 import { s } from './src/theme';
 
@@ -40,6 +41,9 @@ export default function App() {
   const [sound, setSound] = useState(true);
   const [storageError, setStorageError] = useState('');
   const [ukVoice, setUkVoice] = useState<boolean | null>(null);
+  const [voices, setVoices] = useState<VoiceInfo[]>([]);
+  const [voiceId, setVoiceId] = useState<string | undefined>();
+  const [rate, setRate] = useState('0.95');
 
   const [name, setName] = useState(''), [age, setAge] = useState('6'), [interest, setInterest] = useState('Тварини'), [formError, setFormError] = useState('');
   const [limit, setLimit] = useState('15'), [pin, setPin] = useState(''), [savedPin, setSavedPin] = useState('');
@@ -67,8 +71,8 @@ export default function App() {
     try { await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(next)); setStorageError(''); }
     catch { setStorageError('Не вдалося зберегти прогрес. Перевір вільне місце та дозволи браузера.'); }
   };
-  const saveSettings = (extra: Partial<{ limit: number; pin: string; sound: boolean }> = {}) =>
-    AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ limit: Number(limit), pin: savedPin, sound, ...extra }));
+  const saveSettings = (extra: Partial<{ limit: number; pin: string; sound: boolean; voiceId: string; rate: number }> = {}) =>
+    AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ limit: Number(limit), pin: savedPin, sound, voiceId, rate: Number(rate), ...extra }));
 
   useEffect(() => {
     (async () => {
@@ -76,16 +80,21 @@ export default function App() {
         const v = await AsyncStorage.getItem(PROFILE_KEY);
         if (v) { const m = migrate(JSON.parse(v)); if (m) { pRef.current = m; setP(m); } }
         const config = await AsyncStorage.getItem(SETTINGS_KEY);
-        if (config) { const c = JSON.parse(config); setLimit(String(c.limit || 15)); setSavedPin(c.pin || ''); setSound(c.sound !== false); }
+        if (config) { const c = JSON.parse(config); setLimit(String(c.limit || 15)); setSavedPin(c.pin || ''); setSound(c.sound !== false);
+          if (c.voiceId) setVoiceId(c.voiceId);
+          if (c.rate) setRate(String(c.rate));
+          configureSpeech({ voiceId: c.voiceId, rate: Number(c.rate) || 0.95 }); }
       } catch { setStorageError('Не вдалося прочитати збережені дані.'); }
       setLoaded(true);
+      loadVoices().then(list => { setVoices(list); setVoiceId(id => id ?? currentVoice()?.id); }).catch(() => undefined);
     })();
     unlockOnFirstTouch();
     hasUkrainianVoice().then(setUkVoice).catch(() => setUkVoice(null));
     return () => { Speech.stop(); };
   }, []);
 
-  const say = (text: string) => { if (!sound) return; voice.stop(); Speech.stop(); Speech.speak(text, { language: 'uk-UA', rate: 0.85 }); };
+  const say = (text: string, mood?: 'calm' | 'happy') => { if (!sound) return; voice.stop(); speak(text, mood); };
+  const SAMPLE = 'Привіт! Я лисеня Руді. Давай порахуємо разом: дві кульки і ще три кульки, це п’ять кульок. Молодець!';
   const tone: Tone = kind => { if (sound) playTone(kind); };
   const navigate = (next: Screen) => { Speech.stop(); voice.stop(); setScreen(next); scrollTop(); };
 
@@ -145,7 +154,7 @@ export default function App() {
     setLast({ result, ending, sticker: isAdventure ? story.sticker : undefined, newSticker });
     navigate('result');
     tone('win');
-    say(ending ?? `Готово! Сьогодні ти заробляєш ${ses.stars} зірочок. Дякую за старання!`);
+    say(ending ?? `Готово! Зірочок за це заняття: ${ses.stars}. Дякую за старання!`, 'happy');
   };
 
   const back = () => { setSession(null); navigate('home'); };
@@ -419,6 +428,16 @@ export default function App() {
         <View style={s.chips}>{['10', '15', '20'].map(v => <Chip key={v} label={`${v} хв`} active={limit === v} onPress={() => setLimit(v)} />)}</View>
         <Text style={s.label}>Озвучення завдань</Text>
         <View style={s.chips}><Chip label="Увімкнено" active={sound} onPress={() => setSound(true)} /><Chip label="Вимкнено" active={!sound} onPress={() => setSound(false)} /></View>
+        {voices.length > 0 && <>
+          <Text style={s.label}>Голос казкаря</Text>
+          <Text style={s.small}>Найприродніший голос обрано автоматично (позначено ★). Можна прослухати й обрати інший.</Text>
+          <View style={s.chips}>{voices.map((v, i) => <Chip key={v.id} label={`${i === 0 ? '★ ' : ''}${v.name.replace(/^Microsoft |\s*-\s*Ukrainian.*$|\s*\(Ukraine\)/g, '')}`} active={voiceId === v.id}
+            onPress={() => { setVoiceId(v.id); configureSpeech({ voiceId: v.id }); speak(SAMPLE); saveSettings({ voiceId: v.id }).catch(() => undefined); }} />)}</View>
+        </>}
+        <Text style={s.label}>Темп мовлення</Text>
+        <View style={s.chips}>{[['0.85', '🐢 Повільніше'], ['0.95', 'Звичайно'], ['1.05', '🐇 Жвавіше']].map(([v, l]) =>
+          <Chip key={v} label={l} active={rate === v} onPress={() => { setRate(v); configureSpeech({ rate: Number(v) }); speak(SAMPLE); saveSettings({ rate: Number(v) }).catch(() => undefined); }} />)}</View>
+        <Button secondary onPress={() => speak(SAMPLE)}>▶ Прослухати голос</Button>
         <Button onPress={async () => { try { await saveSettings(); setParentMsg('Налаштування збережено.'); } catch { setParentMsg('Не вдалося зберегти.'); } }}>Зберегти налаштування</Button>
         <Text style={s.muted}>{parentMsg}</Text>
       </View>

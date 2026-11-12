@@ -3,6 +3,8 @@
  * Усі функції чисті: випадковість передається параметром, щоб їх можна було тестувати.
  */
 
+import { genderOf, numberWords } from './words';
+
 export type MathLevel = 1 | 2 | 3 | 4 | 5;
 export type Rng = () => number;
 
@@ -24,6 +26,8 @@ export function plural(n: number, forms: [string, string, string]): string {
   return forms[2];
 }
 export const countOf = (n: number, noun: Noun) => `${n} ${plural(n, noun.forms)}`;
+/** Те саме словами з правильним родом — для голосу: «дві кульки», «одне яблуко». */
+export const sayCount = (n: number, noun: Noun) => `${numberWords(n, genderOf(noun.forms[0]))} ${plural(n, noun.forms)}`;
 
 export type TaskKind = 'count' | 'choose' | 'missing' | 'house' | 'word' | 'compare' | 'subtract';
 
@@ -144,10 +148,12 @@ export function kindsFor(level: MathLevel): TaskKind[] {
   }
 }
 
-const fill = (tpl: string, v: { a: number; b: number; sum: number; noun: Noun; who: string }) =>
-  tpl.replace(/\{a\}/g, countOf(v.a, v.noun)).replace(/\{b\}/g, countOf(v.b, v.noun))
-    .replace(/\{b2\}/g, countOf(v.b, v.noun).replace(/^./, c => c.toUpperCase()))
-    .replace(/\{sum\}/g, countOf(v.sum, v.noun)).replace(/\{gen\}/g, v.noun.forms[2]).replace(/\{who\}/g, v.who);
+const fill = (tpl: string, v: { a: number; b: number; sum: number; noun: Noun; who: string }, forVoice = false) => {
+  const c = (n: number) => (forVoice ? sayCount : countOf)(n, v.noun);
+  return tpl.replace(/\{a\}/g, c(v.a)).replace(/\{b\}/g, c(v.b))
+    .replace(/\{b2\}/g, c(v.b).replace(/^./, ch => ch.toUpperCase()))
+    .replace(/\{sum\}/g, c(v.sum)).replace(/\{gen\}/g, v.noun.forms[2]).replace(/\{who\}/g, v.who);
+};
 
 /** Головна функція: створює завдання для рівня. */
 export function makeTask(level: MathLevel, rng: Rng = Math.random, opts: TaskOptions = {}): MathTask {
@@ -165,7 +171,7 @@ export function makeTask(level: MathLevel, rng: Rng = Math.random, opts: TaskOpt
 
   switch (kind) {
     case 'count':
-      return { ...base, kind, prompt: `Скільки всього ${noun.forms[2]}?`, spoken: `Порахуй, скільки всього ${noun.forms[2]}.`,
+      return { ...base, kind, prompt: `Скільки всього ${noun.forms[2]}?`, spoken: `Давай порахуємо! Скільки тут усього ${noun.forms[2]}?`,
         picture: { emoji: noun.emoji, groups: [Math.min(a, 10), Math.min(b, 10)] }, answer: sum, options: numberOptions(sum, rng, 4, maxN),
         solution: `${a} + ${b} = ${sum}`, hint: `Торкайся кожного предмета пальчиком і рахуй уголос: один, два, три…`, label: `Порахуй предмети ${a} + ${b}` };
     case 'choose':
@@ -176,7 +182,7 @@ export function makeTask(level: MathLevel, rng: Rng = Math.random, opts: TaskOpt
       const ans = hideFirst ? a : b;
       return { ...base, kind, prompt: 'Яке число сховалося?',
         equation: hideFirst ? `? + ${b} = ${sum}` : `${a} + ? = ${sum}`,
-        spoken: hideFirst ? `Яке число треба додати до ${b}, щоб вийшло ${sum}?` : `${a} плюс скільки буде ${sum}?`,
+        spoken: hideFirst ? `Тут сховалося число. Яке число треба додати до ${b}, щоб вийшло ${sum}?` : `Тут сховалося число. ${a} плюс скільки — буде ${sum}?`,
         beads: { first: hideFirst ? b : a, second: ans, op: '+', hidden: true },
         answer: ans, options: numberOptions(ans, rng, 4, maxN), solution: `${a} + ${b} = ${sum}`,
         hint: `Рахуй від ${hideFirst ? b : a} до ${sum} і загинай пальчики: скільки пальчиків загнулося?`, label: hideFirst ? `? + ${b} = ${sum}` : `${a} + ? = ${sum}` };
@@ -184,7 +190,7 @@ export function makeTask(level: MathLevel, rng: Rng = Math.random, opts: TaskOpt
     case 'house': {
       const leftHidden = rng() < 0.5;
       const ans = leftHidden ? a : b;
-      return { ...base, kind, prompt: 'Засели будиночок!', spoken: `У будиночку живе число ${sum}. Воно складається з ${leftHidden ? b : a} і ще якого числа?`,
+      return { ...base, kind, prompt: 'Засели будиночок!', spoken: `У цьому будиночку живе число ${sum}. В одному віконці — ${leftHidden ? b : a}. А хто живе в другому?`,
         house: { top: sum, left: leftHidden ? null : a, right: leftHidden ? b : null },
         beads: { first: leftHidden ? b : a, second: ans, op: '+', hidden: true },
         answer: ans, options: numberOptions(ans, rng, 4, maxN), solution: `${sum} = ${a} + ${b}`,
@@ -200,9 +206,11 @@ export function makeTask(level: MathLevel, rng: Rng = Math.random, opts: TaskOpt
     }
     case 'subtract': {
       const takes = opts.templates?.take;
-      const story = takes?.length ? fill(pick(rng, takes), { a, b, sum, noun, who }) : undefined;
+      const tplTake = takes?.length ? pick(rng, takes) : undefined;
+      const story = tplTake ? fill(tplTake, { a, b, sum, noun, who }) : undefined;
+      const storyVoice = tplTake ? fill(tplTake, { a, b, sum, noun, who }, true) : undefined;
       return { ...base, kind, prompt: 'Скільки залишилось?', story,
-        equation: `${sum} − ${b} = ?`, spoken: story ?? `Скільки буде ${sum} мінус ${b}?`,
+        equation: `${sum} − ${b} = ?`, spoken: storyVoice ?? `Було ${sum}, забрали ${b}. Скільки залишилось?`,
         picture: small ? { emoji: noun.emoji, groups: [sum], crossed: b } : undefined,
         beads: { first: sum, second: b, op: '-' },
         answer: a, options: numberOptions(a, rng, 4, maxN), solution: `${sum} − ${b} = ${a}`,
@@ -214,8 +222,9 @@ export function makeTask(level: MathLevel, rng: Rng = Math.random, opts: TaskOpt
       const useMissing = level >= 3 && !!t.missing?.length && rng() < 0.4;
       const tpl = pick(rng, useMissing ? t.missing! : t.add);
       const story = fill(tpl, { a, b, sum, noun, who });
+      const storyVoice = fill(tpl, { a, b, sum, noun, who }, true);
       const ans = useMissing ? b : sum;
-      return { ...base, kind: 'word', prompt: useMissing ? 'Скільки ще треба?' : 'Скільки разом?', story, spoken: story,
+      return { ...base, kind: 'word', prompt: useMissing ? 'Скільки ще треба?' : 'Скільки разом?', story, spoken: storyVoice,
         picture: level <= 2 && !useMissing ? picture : undefined,
         beads: { first: a, second: b, op: '+', hidden: useMissing },
         answer: ans, options: numberOptions(ans, rng, 4, maxN), solution: `${a} + ${b} = ${sum}`,

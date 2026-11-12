@@ -7,7 +7,7 @@ import type { Question } from './stories';
 
 const pickOne = <T,>(list: T[]) => list[Math.floor(Math.random() * list.length)];
 
-export type Say = (text: string) => void;
+export type Say = (text: string, mood?: 'calm' | 'happy') => void;
 export type Tone = (kind: 'good' | 'soft' | 'win') => void;
 const noTone: Tone = () => undefined;
 export type Voice = { listening: boolean; listen: (cb: (t: string) => void) => void; stop: () => void };
@@ -146,7 +146,7 @@ export function MathCard({ task, say, voice, onResolved, onNext, nextLabel = 'Д
       const first = wrong.length === 0;
       setDone(first ? 'first' : 'second');
       tone('good');
-      say(first ? praise : 'Так! Тепер правильно!');
+      say(first ? praise : 'Так! Тепер правильно!', 'happy');
       onResolved(first, String(opt), !first);
       return;
     }
@@ -274,7 +274,7 @@ export function ReadingCard({ passage, question, say, onResolved, onNext, nextLa
     const opt = question.options[i];
     if (i === 0) {
       const first = wrong.length === 0;
-      setDone(first ? 'first' : 'second'); tone('good'); say(first ? pickOne(PRAISE) : 'Так, правильно!');
+      setDone(first ? 'first' : 'second'); tone('good'); say(first ? pickOne(PRAISE) : 'Так, правильно!', 'happy');
       onResolved(first, wpm);
     } else {
       const w = [...wrong, opt]; setWrong(w); tone('soft');
