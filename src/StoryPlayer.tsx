@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { s } from './theme';
-import { Button, MathCard, PathProgress, ReadingCard, Say, Voice, k } from './components';
+import { Button, ExitLink, MathCard, PathProgress, ReadingCard, Say, Tone, Voice, k } from './components';
 import { Story, fillName } from './stories';
 import { MathLevel, MathTask, makeTask } from './math';
 
@@ -14,8 +14,8 @@ export function storyTask(level: MathLevel, scene: Extract<Story['scenes'][numbe
   return makeTask(level, rng, { kind, noun: scene.noun, templates: scene.templates });
 }
 
-export function StoryPlayer({ story, childName, level, readingLevel, say, voice, onMath, onRead, onFinish, onExit, onStep }: {
-  story: Story; childName: string; level: MathLevel; readingLevel: 0 | 1 | 2; say: Say; voice: Voice;
+export function StoryPlayer({ story, childName, level, readingLevel, say, tone, voice, onMath, onRead, onFinish, onExit, onStep }: {
+  story: Story; childName: string; level: MathLevel; readingLevel: 0 | 1 | 2; say: Say; tone: Tone; voice: Voice;
   onMath: (task: MathTask, firstTryOk: boolean, given: string) => void;
   onRead: (ok: boolean, label: string, wpm?: number) => void;
   onFinish: (choice: string) => void; onExit: () => void; onStep?: () => void;
@@ -41,7 +41,7 @@ export function StoryPlayer({ story, childName, level, readingLevel, say, voice,
 
   return (
     <View style={s.lesson}>
-      <Pressable accessibilityRole="button" onPress={onExit}><Text style={s.back}>← До моїх пригод</Text></Pressable>
+      <ExitLink label="← До моїх пригод" onExit={onExit} />
       <PathProgress icons={story.scenes.map(x => SCENE_ICON[x.type])} index={index} hero={story.hero} />
       <Text style={[s.eyebrow, { textAlign: 'center' }]}>{story.tag} · {story.name.toUpperCase()}</Text>
       <Text style={{ fontSize: 64, textAlign: 'center' }}>{scene.art}</Text>
@@ -75,14 +75,14 @@ export function StoryPlayer({ story, childName, level, readingLevel, say, voice,
 
       {scene.type === 'math' && task && <>
         <Text style={[s.subtitle, { fontSize: 18 }]}>{text}</Text>
-        <MathCard key={task.id} task={task} say={say} voice={voice}
+        <MathCard key={task.id} task={task} say={say} tone={tone} voice={voice}
           onResolved={(ok, given) => onMath(task, ok, given)} onNext={next}
           nextLabel={index + 1 >= story.scenes.length ? 'Завершити пригоду 🏁' : 'Далі →'} />
       </>}
 
       {scene.type === 'read' && <>
         <Text style={[s.subtitle, { fontSize: 18 }]}>{text}</Text>
-        <ReadingCard key={index} passage={scene.passages[readingLevel]} question={readingLevel === 0 ? scene.easy : scene.main} say={say}
+        <ReadingCard key={index} passage={scene.passages[readingLevel]} question={readingLevel === 0 ? scene.easy : scene.main} say={say} tone={tone}
           onResolved={(ok, wpm) => onRead(ok, `«${story.name}»: ${(readingLevel === 0 ? scene.easy : scene.main).q}`, wpm)} onNext={next} />
       </>}
     </View>

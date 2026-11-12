@@ -8,6 +8,8 @@ import type { Question } from './stories';
 const pickOne = <T,>(list: T[]) => list[Math.floor(Math.random() * list.length)];
 
 export type Say = (text: string) => void;
+export type Tone = (kind: 'good' | 'soft' | 'win') => void;
+const noTone: Tone = () => undefined;
 export type Voice = { listening: boolean; listen: (cb: (t: string) => void) => void; stop: () => void };
 
 export function Button({ children, onPress, secondary = false, disabled = false, big = false }:
@@ -32,26 +34,41 @@ export function Celebrate({ text, emoji = '🎉 ⭐ 🎉' }: { text: string; emo
   );
 }
 
-/** Предмети для рахунку: групи з «+» між ними; закреслені — для віднімання. */
-export function Picture({ emoji, groups, crossed = 0 }: { emoji: string; groups: number[]; crossed?: number }) {
+/**
+ * Предмети для рахунку: групи з «+» між ними; закреслені — для віднімання.
+ * Предмет можна торкнутися — на ньому з'явиться його номер (рахуємо пальчиком).
+ */
+export function Picture({ emoji, groups, crossed = 0, onCount }: { emoji: string; groups: number[]; crossed?: number; onCount?: (n: number) => void }) {
+  const [marks, setMarks] = useState<Record<string, number>>({});
+  const tap = (key: string) => {
+    if (marks[key]) return;
+    const n = Object.keys(marks).length + 1;
+    setMarks({ ...marks, [key]: n });
+    onCount?.(n);
+  };
   return (
-    <View style={k.picture} accessibilityLabel={`Малюнок: ${groups.join(' і ')}`}>
-      {groups.map((g, gi) => (
-        <React.Fragment key={gi}>
-          {gi > 0 && <Text style={k.plus}>+</Text>}
-          <View style={k.group}>
-            {Array.from({ length: g }, (_, i) => {
-              const isCrossed = gi === groups.length - 1 && i >= g - crossed;
-              return (
-                <View key={i} style={k.item}>
-                  <Text style={[k.itemEmoji, isCrossed && { opacity: .3 }]}>{emoji}</Text>
-                  {isCrossed && <Text style={k.cross}>✕</Text>}
-                </View>
-              );
-            })}
-          </View>
-        </React.Fragment>
-      ))}
+    <View style={{ alignItems: 'center', gap: 8 }}>
+      <View style={k.picture} accessibilityLabel={`Малюнок: ${groups.join(' і ')}`}>
+        {groups.map((g, gi) => (
+          <React.Fragment key={gi}>
+            {gi > 0 && <Text style={k.plus}>+</Text>}
+            <View style={k.group}>
+              {Array.from({ length: g }, (_, i) => {
+                const isCrossed = gi === groups.length - 1 && i >= g - crossed;
+                const key = `${gi}-${i}`;
+                return (
+                  <Pressable key={i} onPress={() => tap(key)} accessibilityLabel="Порахувати предмет" style={k.item}>
+                    <Text style={[k.itemEmoji, (isCrossed || !!marks[key]) && { opacity: isCrossed ? .3 : .55 }]}>{emoji}</Text>
+                    {isCrossed && <Text style={k.cross}>✕</Text>}
+                    {!!marks[key] && !isCrossed && <View style={k.mark}><Text style={k.markText}>{marks[key]}</Text></View>}
+                  </Pressable>
+                );
+              })}
+            </View>
+          </React.Fragment>
+        ))}
+      </View>
+      <Text style={s.small}>{Object.keys(marks).length ? `Порахувано: ${Object.keys(marks).length}` : '👆 Торкайся предметів, щоб рахувати'}</Text>
     </View>
   );
 }
@@ -108,15 +125,15 @@ const COMPARE_LABEL: Record<string, string> = { '<': 'менше', '=': 'дор�
  * Одне завдання. Перша помилка → підказка й друга спроба; друга помилка → показуємо розв'язок.
  * onResolved викликається один раз: ok = правильно з першої спроби.
  */
-export function MathCard({ task, say, voice, onResolved, onNext, nextLabel = 'Далі →' }:
-  { task: MathTask; say: Say; voice: Voice; onResolved: (firstTryOk: boolean, given: string, solvedLater: boolean) => void; onNext: () => void; nextLabel?: string }) {
+export function MathCard({ task, say, voice, onResolved, onNext, nextLabel = 'Далі →', tone = noTone }:
+  { task: MathTask; say: Say; voice: Voice; tone?: Tone; onResolved: (firstTryOk: boolean, given: string, solvedLater: boolean) => void; onNext: () => void; nextLabel?: string }) {
   const [wrong, setWrong] = useState<(number | string)[]>([]);
   const [done, setDone] = useState<null | 'first' | 'second' | 'shown'>(null);
   const [message, setMessage] = useState('');
   const [voiceMsg, setVoiceMsg] = useState('');
   const shake = useRef(new Animated.Value(0)).current;
   const { width } = useWindowDimensions();
-  const tile = Math.max(64, Math.min(92, Math.floor((width - 80) / 4)));
+  const tile = Math.max(64, Math.min(width > 600 ? 112 : 92, Math.floor((width - 80) / 4)));
   const praise = useMemo(() => pickOne(PRAISE), [task.id]);
 
   useEffect(() => { say(task.spoken); }, [task.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -128,11 +145,13 @@ export function MathCard({ task, say, voice, onResolved, onNext, nextLabel = 'Д
     if (isCorrect(task, opt)) {
       const first = wrong.length === 0;
       setDone(first ? 'first' : 'second');
+      tone('good');
       say(first ? praise : 'Так! Тепер правильно!');
       onResolved(first, String(opt), !first);
       return;
     }
     doShake();
+    tone('soft');
     const nextWrong = [...wrong, opt];
     setWrong(nextWrong);
     if (nextWrong.length >= 2) {
@@ -171,7 +190,7 @@ export function MathCard({ task, say, voice, onResolved, onNext, nextLabel = 'Д
       <Text style={s.title}>{task.prompt}</Text>
 
       {(hasPicture || !!task.house || !!task.equation) && <View style={k.board}>
-        {hasPicture && <Picture {...task.picture!} />}
+        {hasPicture && <Picture {...task.picture!} onCount={n => say(String(n))} />}
         {task.house && <House {...task.house} reveal={reveal} />}
         {!!task.equation && !task.house && (
           <Text style={s.equation}>{reveal !== undefined ? task.equation.replace('?', String(reveal)).replace('◯', String(reveal)) : task.equation}</Text>
@@ -186,7 +205,7 @@ export function MathCard({ task, say, voice, onResolved, onNext, nextLabel = 'Д
             <Pressable key={String(o)} accessibilityRole="button" accessibilityLabel={`Відповідь ${task.kind === 'compare' ? COMPARE_LABEL[o] : o}`}
               disabled={!!done || isWrong} onPress={() => choose(o)}
               style={({ pressed }) => [k.option, { width: tile, height: tile + 4 }, isWrong && k.optionWrong, isRight && k.optionRight, pressed && { transform: [{ scale: .95 }] }]}>
-              <Text style={[k.optionText, isWrong && { color: C.bad }, isRight && { color: C.good }]}>{o}</Text>
+              <Text style={[k.optionText, { fontSize: Math.round(tile * .42) }, isWrong && { color: C.bad }, isRight && { color: C.good }]}>{o}</Text>
               {task.kind === 'compare' && <Text style={k.optionSub}>{COMPARE_LABEL[o]}</Text>}
               {isWrong && <Text style={k.optionMark}>✗</Text>}
               {isRight && <Text style={k.optionMark}>✓</Text>}
@@ -227,8 +246,8 @@ export function MathCard({ task, say, voice, onResolved, onNext, nextLabel = 'Д
 }
 
 /** Читання з таймером і питанням на розуміння (дві спроби). */
-export function ReadingCard({ passage, question, say, onResolved, onNext, nextLabel = 'Далі →' }:
-  { passage: string; question: Question; say: Say; onResolved: (firstTryOk: boolean, wpm: number | undefined) => void; onNext: () => void; nextLabel?: string }) {
+export function ReadingCard({ passage, question, say, onResolved, onNext, nextLabel = 'Далі →', tone = noTone }:
+  { passage: string; question: Question; say: Say; tone?: Tone; onResolved: (firstTryOk: boolean, wpm: number | undefined) => void; onNext: () => void; nextLabel?: string }) {
   const [phase, setPhase] = useState<'ready' | 'reading' | 'question'>('ready');
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [seconds, setSeconds] = useState(0);
@@ -255,10 +274,10 @@ export function ReadingCard({ passage, question, say, onResolved, onNext, nextLa
     const opt = question.options[i];
     if (i === 0) {
       const first = wrong.length === 0;
-      setDone(first ? 'first' : 'second'); say(first ? pickOne(PRAISE) : 'Так, правильно!');
+      setDone(first ? 'first' : 'second'); tone('good'); say(first ? pickOne(PRAISE) : 'Так, правильно!');
       onResolved(first, wpm);
     } else {
-      const w = [...wrong, opt]; setWrong(w);
+      const w = [...wrong, opt]; setWrong(w); tone('soft');
       if (w.length >= 2) { setDone('shown'); say(`Правильна відповідь: ${question.options[0]}`); onResolved(false, wpm); }
       else say('Подивись у текст ще раз. Там є відповідь!');
     }
@@ -298,6 +317,17 @@ export function ReadingCard({ passage, question, say, onResolved, onNext, nextLa
   );
 }
 
+/** Вихід із заняття з підтвердженням, щоб дитина випадково не загубила пригоду. */
+export function ExitLink({ label, onExit }: { label: string; onExit: () => void }) {
+  const [ask, setAsk] = useState(false);
+  useEffect(() => { if (!ask) return; const t = setTimeout(() => setAsk(false), 4000); return () => clearTimeout(t); }, [ask]);
+  return (
+    <Pressable accessibilityRole="button" onPress={() => (ask ? onExit() : setAsk(true))} style={{ alignSelf: 'flex-start', paddingVertical: 6 }}>
+      <Text style={[s.back, ask && { color: C.bad, fontWeight: '700' }]}>{ask ? 'Точно вийти? Натисни ще раз' : label}</Text>
+    </Pressable>
+  );
+}
+
 /** Доріжка пригоди: кружечки сцен і герой, що йде вперед. */
 export function PathProgress({ icons, index, hero }: { icons: string[]; index: number; hero: string }) {
   return (
@@ -323,7 +353,9 @@ export const k = StyleSheet.create({
   board: { padding: 22, borderRadius: 24, backgroundColor: '#F4F1E4', gap: 16, alignItems: 'center', minHeight: 110, justifyContent: 'center' },
   picture: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: 10 },
   group: { flexDirection: 'row', flexWrap: 'wrap', maxWidth: 260, justifyContent: 'center', padding: 8, borderRadius: 16, backgroundColor: '#FFFFFFAA', gap: 2 },
-  item: { width: 46, height: 46, alignItems: 'center', justifyContent: 'center' },
+  item: { width: 50, height: 50, alignItems: 'center', justifyContent: 'center' },
+  mark: { position: 'absolute', top: 2, right: 0, minWidth: 22, height: 22, borderRadius: 11, backgroundColor: C.green, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  markText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
   itemEmoji: { fontSize: 34 },
   cross: { position: 'absolute', fontSize: 34, color: C.bad, fontWeight: '800' },
   plus: { fontSize: 34, fontWeight: '700', color: '#7A8A62' },

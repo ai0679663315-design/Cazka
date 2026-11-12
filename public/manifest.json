@@ -1,0 +1,16 @@
+{
+  "name": "Дитяча казка",
+  "short_name": "Казка",
+  "description": "Пригоди, читання та математика для першого класу",
+  "lang": "uk",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#FAF9F5",
+  "theme_color": "#E4EBCF",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

@@ -10,6 +10,15 @@
       "ios",
       "android",
       "web"
-    ]
+    ],
+    "web": {
+      "lang": "uk",
+      "name": "Дитяча казка",
+      "shortName": "Казка",
+      "themeColor": "#E4EBCF",
+      "backgroundColor": "#FAF9F5",
+      "description": "Пригоди, читання та математика для першого класу",
+      "favicon": "./public/icon-192.png"
+    }
   }
 }

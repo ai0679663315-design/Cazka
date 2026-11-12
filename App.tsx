@@ -8,7 +8,8 @@ import { recordAttempt, nextDifficulty } from './src/learning';
 import { LEVELS, MathLevel, MathTask, TaskKind, adaptLevel, levelFromAssessment, makeTask } from './src/math';
 import { STORIES, INTERESTS, nextStory, storyById, fillName, Story } from './src/stories';
 import { Profile, Result, ResultKind, PROFILE_KEY, SETTINGS_KEY, migrate, newProfile, readingLevel } from './src/profile';
-import { Button, Celebrate, MathCard, ReadingCard } from './src/components';
+import { Button, Celebrate, ExitLink, MathCard, ReadingCard, Tone } from './src/components';
+import { hasUkrainianVoice, playTone, unlockOnFirstTouch } from './src/webExtras';
 import { StoryPlayer } from './src/StoryPlayer';
 import { s } from './src/theme';
 
@@ -29,6 +30,7 @@ const KIND_ICON: Record<ResultKind, string> = { adventure: '🗺️', math: '�
 export default function App() {
   const { width } = useWindowDimensions();
   const wide = width > 850;
+  const roomy = width > 600; // планшет: картки в рядок
   const voice = useVoiceInput();
 
   const [p, setP] = useState<Profile | null>(null);
@@ -37,6 +39,7 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>('home');
   const [sound, setSound] = useState(true);
   const [storageError, setStorageError] = useState('');
+  const [ukVoice, setUkVoice] = useState<boolean | null>(null);
 
   const [name, setName] = useState(''), [age, setAge] = useState('6'), [interest, setInterest] = useState('Тварини'), [formError, setFormError] = useState('');
   const [limit, setLimit] = useState('15'), [pin, setPin] = useState(''), [savedPin, setSavedPin] = useState('');
@@ -77,10 +80,13 @@ export default function App() {
       } catch { setStorageError('Не вдалося прочитати збережені дані.'); }
       setLoaded(true);
     })();
+    unlockOnFirstTouch();
+    hasUkrainianVoice().then(setUkVoice).catch(() => setUkVoice(null));
     return () => { Speech.stop(); };
   }, []);
 
   const say = (text: string) => { if (!sound) return; voice.stop(); Speech.stop(); Speech.speak(text, { language: 'uk-UA', rate: 0.85 }); };
+  const tone: Tone = kind => { if (sound) playTone(kind); };
   const navigate = (next: Screen) => { Speech.stop(); voice.stop(); setScreen(next); scrollTop(); };
 
   // ---------- заняття ----------
@@ -138,6 +144,7 @@ export default function App() {
     const ending = isAdventure ? fillName(story.ending, prof.name, choice) : undefined;
     setLast({ result, ending, sticker: isAdventure ? story.sticker : undefined, newSticker });
     navigate('result');
+    tone('win');
     say(ending ?? `Готово! Сьогодні ти заробляєш ${ses.stars} зірочок. Дякую за старання!`);
   };
 
@@ -178,7 +185,7 @@ export default function App() {
   const renderOnboarding = () => <>
     <Text style={s.title}>Кожна пригода{'\n'}починається з тебе.</Text>
     <Text style={s.subtitle}>Читай, рахуй і відкривай нові світи разом із Руді.</Text>
-    <View style={[s.row, { flexDirection: wide ? 'row' : 'column' }]}>
+    <View style={[s.row, { flexDirection: roomy ? 'row' : 'column' }]}>
       <View style={[s.card, { flex: 1 }]}>
         <Text style={s.sectionTitle}>Познайомимось? 👋</Text>
         <Text style={s.muted}>Я запам’ятаю твоє ім’я та наші відкриття на цьому пристрої.</Text>
@@ -225,7 +232,7 @@ export default function App() {
       <Button onPress={() => begin('assessment')}>Спробувати · 3 хв →</Button>
     </View>}
 
-    <Pressable accessibilityRole="button" onPress={() => begin('adventure', next)} style={[s.hero, { flexDirection: wide ? 'row' : 'column', backgroundColor: next.color }]}>
+    <Pressable accessibilityRole="button" onPress={() => begin('adventure', next)} style={[s.hero, { flexDirection: roomy ? 'row' : 'column', backgroundColor: next.color }]}>
       <View style={{ flex: 1, gap: 16 }}>
         <Text style={[s.heroBadge, { color: next.ink }]}>✦  {prof.stickers.includes(next.id) ? 'ПРОЙДИ ЗНОВУ' : 'ТВОЯ НАСТУПНА ПРИГОДА'}</Text>
         <Text style={s.heroTitle}>{next.name}</Text>
@@ -242,7 +249,7 @@ export default function App() {
     </Pressable>
 
     <View style={s.sectionHead}><Text style={s.sectionTitle}>Маленька практика</Text><Text style={s.muted}>У своєму темпі</Text></View>
-    <View style={[s.row, { flexDirection: wide ? 'row' : 'column' }]}>
+    <View style={[s.row, { flexDirection: roomy ? 'row' : 'column' }]}>
       <Pressable accessibilityRole="button" onPress={() => begin('math')} style={[s.practice, { backgroundColor: '#F7EBDD' }]}>
         <View style={s.practiceTop}><Text style={{ fontSize: 38 }}>🔢</Text><Text style={{ fontSize: 24, color: '#6B735F' }}>↗</Text></View>
         <Text style={s.practiceTitle}>Математична майстерня</Text>
@@ -265,7 +272,7 @@ export default function App() {
       {STORIES.map(w => {
         const done = prof.stickers.includes(w.id);
         return <Pressable key={w.id} accessibilityRole="button" onPress={() => begin('adventure', w)}
-          style={({ pressed }) => [s.world, { backgroundColor: w.color, flexBasis: wide ? '30%' : '46%', flexGrow: 1, minHeight: 170 }, pressed && { opacity: .85 }]}>
+          style={({ pressed }) => [s.world, { backgroundColor: w.color, flexBasis: roomy ? '30%' : '46%', flexGrow: 1, minHeight: 170 }, pressed && { opacity: .85 }]}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
             <Text style={{ fontSize: 40 }}>{w.icon}</Text>
             {done && <Text style={{ fontSize: 26 }}>{w.sticker.emoji}</Text>}
@@ -280,10 +287,10 @@ export default function App() {
   </>;
 
   const renderMath = (prof: Profile) => task && <View style={s.lesson}>
-    <Pressable onPress={back}><Text style={s.back}>← Завершити заняття</Text></Pressable>
+    <ExitLink label="← Завершити заняття" onExit={back} />
     <SessionBar total={PRACTICE_LENGTH} label={`МАЙСТЕРНЯ · РІВЕНЬ ${prof.mathLevel}`} />
     {!!levelUp && <Celebrate text={levelUp} emoji="🏆" />}
-    <MathCard key={task.id} task={task} say={say} voice={voice}
+    <MathCard key={task.id} task={task} say={say} tone={tone} voice={voice}
       onResolved={(ok, given) => recordMath(task, ok, given)}
       nextLabel={(session?.total ?? 0) >= PRACTICE_LENGTH ? 'Завершити 🏁' : 'Далі →'}
       onNext={() => { setLevelUp(''); if ((sessionRef.current?.total ?? 0) >= PRACTICE_LENGTH) finish(); else { setTask(makeTask(pRef.current!.mathLevel)); scrollTop(); } }} />
@@ -292,16 +299,16 @@ export default function App() {
   const renderAssessment = () => {
     const read = STORIES[0].scenes.find(x => x.type === 'read');
     return <View style={s.lesson}>
-      <Pressable onPress={back}><Text style={s.back}>← Завершити знайомство</Text></Pressable>
+      <ExitLink label="← Завершити знайомство" onExit={back} />
       <SessionBar total={ASSESS_PLAN.length + 1} label="ЗНАЙОМСТВО" />
-      {assessPhase === 'math' && task && <MathCard key={task.id} task={task} say={say} voice={voice}
+      {assessPhase === 'math' && task && <MathCard key={task.id} task={task} say={say} tone={tone} voice={voice}
         onResolved={(ok, given) => recordMath(task, ok, given)}
         onNext={() => {
           const n = step + 1;
           if (n >= ASSESS_PLAN.length) { setAssessPhase('read'); scrollTop(); return; }
           setStep(n); setTask(makeTask(ASSESS_PLAN[n].level, Math.random, { kind: ASSESS_PLAN[n].kind })); scrollTop();
         }} />}
-      {assessPhase === 'read' && read?.type === 'read' && <ReadingCard passage={read.passages[1]} question={read.main} say={say}
+      {assessPhase === 'read' && read?.type === 'read' && <ReadingCard passage={read.passages[1]} question={read.main} say={say} tone={tone}
         onResolved={(ok, wpm) => recordReading(ok, read.main.q, wpm)} onNext={() => finish()} nextLabel="Завершити знайомство 🏁" />}
     </View>;
   };
@@ -311,11 +318,11 @@ export default function App() {
     if (!read || read.type !== 'read') return null;
     const q = rLevel === 0 ? read.easy : read.main;
     return <View style={s.lesson}>
-      <Pressable onPress={back}><Text style={s.back}>← Завершити заняття</Text></Pressable>
+      <ExitLink label="← Завершити заняття" onExit={back} />
       <Text style={s.eyebrow}>ЧИТАННЯ · {readingStory.tag}</Text>
       <Text style={{ fontSize: 60, textAlign: 'center' }}>{read.art}</Text>
       <Text style={[s.subtitle, { fontSize: 18 }]}>{read.text}</Text>
-      <ReadingCard passage={read.passages[rLevel]} question={q} say={say}
+      <ReadingCard passage={read.passages[rLevel]} question={q} say={say} tone={tone}
         onResolved={(ok, wpm) => recordReading(ok, `«${readingStory.name}»: ${q.q}`, wpm)} onNext={() => finish()} nextLabel="Завершити 🏁" />
     </View>;
   };
@@ -424,6 +431,7 @@ export default function App() {
       <View style={s.card}>
         <Text style={s.sectionTitle}>Пам’ять і голос</Text>
         <Text style={s.muted}>Профіль та результати зберігаються лише на цьому пристрої. Це навчальні пригоди за готовими сюжетами. Вільний AI-діалог і синхронізація ще не підключені.</Text>
+        <Text style={s.muted}>{ukVoice === true ? '✅ Український голос для озвучення на цьому пристрої знайдено.' : ukVoice === false ? '⚠️ Українського голосу для озвучення не знайдено: текст може читатися з акцентом. Додайте українську мову синтезу мовлення в налаштуваннях планшета (Мова → Синтез мовлення) або відкрийте сторінку в Chrome.' : 'Перевірити наявність українського голосу на цьому пристрої не вдалося.'}</Text>
         <Text style={s.muted}>Голосове розпізнавання працює у сумісному браузері та може використовувати сервіс виробника браузера. Застосунок не зберігає аудіозаписи.</Text>
         <Button secondary onPress={() => {
           if (!resetConfirm) { setResetConfirm(true); return; }
@@ -438,7 +446,7 @@ export default function App() {
     if (!p) return renderOnboarding();
     switch (screen) {
       case 'home': return renderHome(p);
-      case 'story': return <StoryPlayer key={story.id + (session?.startedAt ?? 0)} story={story} childName={p.name} level={p.mathLevel} readingLevel={rLevel} say={say} voice={voice}
+      case 'story': return <StoryPlayer key={story.id + (session?.startedAt ?? 0)} story={story} childName={p.name} level={p.mathLevel} readingLevel={rLevel} say={say} tone={tone} voice={voice}
         onMath={recordMath} onRead={recordReading} onFinish={finish} onExit={back} onStep={scrollTop} />;
       case 'math': return renderMath(p);
       case 'assessment': return renderAssessment();
