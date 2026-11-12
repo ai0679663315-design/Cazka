@@ -3,6 +3,7 @@ import { SafeAreaView, ScrollView, View, Text, TextInput, Pressable, StyleSheet 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Speech from 'expo-speech';
 import { StatusBar } from 'expo-status-bar';
+import { useVoiceInput } from './src/useVoiceInput';
 
 type Profile = { name: string; age: string; interest: string; completed: number; reading: number; math: number };
 const KEY = 'cazka.profile.v1';
@@ -13,6 +14,7 @@ const stories = [
 ];
 const speak = (message: string) => { Speech.stop(); Speech.speak(message, { language: 'uk-UA', rate: 0.85 }); };
 export default function App() {
+  const voice = useVoiceInput();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [ready, setReady] = useState(false);
   const [name, setName] = useState(''); const [age, setAge] = useState(''); const [interest, setInterest] = useState('');
@@ -29,9 +31,9 @@ export default function App() {
   return <SafeAreaView style={styles.page}><StatusBar style="dark"/><ScrollView contentContainerStyle={styles.content}>
     <Text style={styles.brand}>✦ ДИТЯЧА КАЗКА</Text>
     {!profile ? <View style={styles.card}><Text style={styles.title}>Привіт, мандрівнику! 👋</Text><Text style={styles.body}>Познайомимося один раз, а потім я пам’ятатиму наші пригоди.</Text>
-      <TextInput style={styles.input} placeholder="Як тебе звати?" value={name} onChangeText={setName}/>
+      <TextInput style={styles.input} placeholder="Як тебе звати?" value={name} onChangeText={setName}/><Button secondary label={voice.listening ? "🎙️ Слухаю..." : "🎙️ Назвати ім’я голосом"} onPress={()=>voice.listen(setName)}/>
       <TextInput style={styles.input} placeholder="Скільки тобі років?" value={age} onChangeText={setAge} keyboardType="number-pad"/>
-      <TextInput style={styles.input} placeholder="Що тобі подобається?" value={interest} onChangeText={setInterest}/>
+      <TextInput style={styles.input} placeholder="Що тобі подобається?" value={interest} onChangeText={setInterest}/><Button secondary label="🎙️ Розповісти голосом" onPress={()=>voice.listen(setInterest)}/>
       <Button label="Почати знайомство →" onPress={async()=>{if(!name.trim())return;await save({name:name.trim(),age,interest,completed:0,reading:0,math:0});speak('Привіт, '+name+'! Рада знайомству. Вирушаймо у пригоду!');}}/>
       <Button secondary label="🔊 Послухати привітання" onPress={()=>speak('Привіт! Як тебе звати? Скільки тобі років? Що тобі подобається?')}/></View>
     : screen==='home' ? <><Text style={styles.title}>Привіт, {profile.name}! ☀️</Text><Text style={styles.body}>Я пам’ятаю тебе. Ми вже пройшли {profile.completed} пригод.</Text>
@@ -39,10 +41,11 @@ export default function App() {
       <View style={styles.card}><Text style={styles.heading}>📖 Читання: {profile.reading}</Text><Text style={styles.heading}>🔢 Арифметика: {profile.math}</Text><Text style={styles.body}>Твої результати залишаться тут після наступного запуску.</Text></View></>
     : screen==='story' ? <View style={styles.card}><Text style={styles.title}>🌲 {story.title}</Text><Text style={styles.body}>{story.intro}</Text><Button label="🔊 Послухати історію" secondary onPress={()=>speak(story.intro)}/><Button label="Допомогти герою →" onPress={()=>{setScreen('math');speak(story.math);}}/></View>
     : screen==='math' ? <View style={styles.card}><Text style={styles.heading}>🔢 Випробування на слух</Text><Text style={styles.body}>Слухай уважно, рахуй у голові й введи відповідь.</Text><Button secondary label="🔊 Прослухати приклад" onPress={()=>speak(story.math)}/>
-      <TextInput style={styles.input} placeholder="Твоя відповідь" keyboardType="number-pad" value={answer} onChangeText={setAnswer}/>
+      <TextInput style={styles.input} placeholder="Твоя відповідь" keyboardType="number-pad" value={answer} onChangeText={setAnswer}/><Button secondary label="🎙️ Сказати відповідь" onPress={()=>voice.listen(t=>{const words: Record<string,string> = {нуль:"0",один:"1",одна:"1",два:"2",дві:"2",три:"3",чотири:"4",п’ять:"5",пять:"5",шість:"6",сім:"7",вісім:"8",дев’ять:"9",десять:"10"};setAnswer(words[t.toLowerCase().trim()] || t.replace(/[^0-9]/g,""));})}/>
       <Button label="Перевірити" onPress={async()=>{if(Number(answer)===story.answer&&answer.trim()){setMathPassed(true);setFeedback('Правильно! Ти допоміг герою.');if(profile)await save({...profile,math:profile.math+1});speak('Правильно! Молодець!');}else{setFeedback('Спробуй ще раз. Ти зможеш!');speak('Спробуй ще раз.');}}}/><Text style={styles.body}>{feedback}</Text>{mathPassed&&<Button label="Читати записку →" onPress={()=>{setScreen('reading');speak('Прочитай записку вголос.');}}/>}</View>
     : screen==='reading' ? <View style={styles.card}><Text style={styles.heading}>📖 Таємнича записка</Text><Text style={styles.reading}>{story.reading}</Text><Text style={styles.body}>{story.question}</Text>{story.options.map((o,i)=><Button key={o} secondary label={o} onPress={()=>{if(i===story.correct){finish();}else{setFeedback('Подумай і спробуй ще раз.');speak('Спробуй ще раз.');}}}/>)}<Text style={styles.body}>{feedback}</Text></View>
     : <View style={styles.card}><Text style={styles.title}>🏆 Пригоду завершено!</Text><Text style={styles.body}>Молодець, {profile.name}! Наступного разу на тебе чекатиме нова історія.</Text><Button label="На головну" onPress={()=>setScreen('home')}/></View>}
+    {!!voice.error && <Text style={styles.body}>{voice.error}</Text>}
     <Text style={styles.footer}>Прогрес зберігається на цьому пристрої • Голосові відповіді — наступний етап</Text>
   </ScrollView></SafeAreaView>;
 }
