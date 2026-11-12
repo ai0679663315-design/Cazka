@@ -1,76 +1,485 @@
-import React, {useEffect, useRef, useState} from 'react';
-import {SafeAreaView, ScrollView, View, Text, TextInput, Pressable, StyleSheet, useWindowDimensions} from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { SafeAreaView, ScrollView, View, Text, TextInput, Pressable, useWindowDimensions } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Speech from 'expo-speech';
-import {StatusBar} from 'expo-status-bar';
-import {useVoiceInput} from './src/useVoiceInput';
-import {makeMathTask, normalizeAnswer, newRecord, recordAttempt, nextDifficulty, LearningRecord, MathTask} from './src/learning';
+import { StatusBar } from 'expo-status-bar';
+import { useVoiceInput } from './src/useVoiceInput';
+import { recordAttempt, nextDifficulty } from './src/learning';
+import { LEVELS, MathLevel, MathTask, TaskKind, adaptLevel, levelFromAssessment, makeTask } from './src/math';
+import { STORIES, INTERESTS, nextStory, storyById, fillName, Story } from './src/stories';
+import { Profile, Result, ResultKind, PROFILE_KEY, SETTINGS_KEY, migrate, newProfile, readingLevel } from './src/profile';
+import { Button, Celebrate, MathCard, ReadingCard } from './src/components';
+import { StoryPlayer } from './src/StoryPlayer';
+import { s } from './src/theme';
 
-type Result={date:string;kind:string;correct:number;total:number;wpm?:number;errors:string[]};
-type Profile={name:string;age:string;interest:string;record:LearningRecord;results:Result[];completed:number;minutes:number;onboarded:boolean};
-type Session={kind:'adventure'|'math'|'reading'|'assessment';story:number;step:number;correct:number;total:number;errors:string[]};
-const KEY='cazka.profile.v2';
-const worlds=[
- {icon:'🌳',name:'Ліс загублених стежок',tag:'ЛІСОВА ПРИГОДА',color:'#DFEBD9',ink:'#426440',intro:'Лисеня Руді знайшло карту лісу. Але вітер розкидав усі підказки! Допоможи йому відшукати дорогу до старого дуба.',texts:['Лис іде. Ось дуб. Тут дім.','Руді йде лісовою стежкою. Біля старого дуба сидить сова. Вона тримає ключ від будиночка.','Ранкове сонце освітило лісову стежку. Руді побачив сову біля старого дуба. Вона берегла маленький золотий ключ від будиночка. Друзі вирішили віднести його білочці, яка чекала на них за річкою.'],question:'Хто тримав ключ?',options:['Сова','Ведмідь','Заєць'],easyQ:'Що побачив лис?',easyOpts:['Дуб','Море','Ракету'],end:'Сова віддала ключ, і Руді знайшов будиночок білочки. Завдяки тобі друзі знову разом!'},
- {icon:'🪐',name:'Таємниця тихої планети',tag:'КОСМІЧНА МІСІЯ',color:'#E9E3F2',ink:'#6B5789',intro:'Капітан Луна почула дивний сигнал з тихої планети. Маленький робот загубив свою зіркову батарею. Вирушаймо на пошуки!',texts:['Ось кит. Він тут. Кит спить.','На синій планеті жив космічний кит. Він знайшов батарею біля ракети. Робот дуже зрадів знахідці.','Космічний кит почув тихий сигнал біля покинутої ракети. На піску лежала срібна батарея. Кит покликав капітана Луну. Разом вони повернули батарею роботу, і на тихій планеті знову засяяли вогні.'],question:'Де знайшли батарею?',options:['Біля ракети','У лісі','Під водою'],easyQ:'Хто спить?',easyOpts:['Кит','Кіт','Лис'],end:'Робот увімкнув вогні на планеті та подякував команді. Твоя уважність врятувала космічну місію!'},
- {icon:'⛵',name:'Острів добрих відкриттів',tag:'МОРСЬКА ПОДОРОЖ',color:'#DBEAF0',ink:'#3D7182',intro:'Мореплавиця Мія отримала лист у пляшці. На далекому острові заховано скарб. Щоб знайти його, треба прочитати підказку та порахувати мушлі.',texts:['Ось Мія. Тут море. Там краб.','Мія знайшла скриню під пальмою. У ній лежали книжки. Діти з острова давно мріяли про бібліотеку.','Коли човен причалив до берега, Мія помітила сліди маленького краба. Вони привели її до високої пальми. Під корінням була скриня з книжками. Мія подарувала їх дітям, і на острові відкрилася перша бібліотека.'],question:'Що було у скрині?',options:['Книжки','Монети','Мушлі'],easyQ:'Кого побачила Мія?',easyOpts:['Краба','Совy','Кита'],end:'Справжнім скарбом виявилися книжки. Тепер на острові є бібліотека, а в тебе — ще одна завершена пригода!'}
+type Screen = 'home' | 'story' | 'math' | 'reading' | 'assessment' | 'result' | 'progress' | 'parents';
+type Session = {
+  kind: ResultKind; storyId?: string; correct: number; total: number; errors: string[];
+  stars: number; mathCorrect: number; streak: number; wpm?: number; startedAt: number;
+};
+
+const PRACTICE_LENGTH = 8;
+const ASSESS_PLAN: { level: MathLevel; kind: TaskKind }[] = [
+  { level: 1, kind: 'count' }, { level: 2, kind: 'choose' }, { level: 3, kind: 'missing' }, { level: 4, kind: 'choose' },
 ];
-const levels={easy:0,medium:1,hard:2};
-const formatDate=(s:string)=>new Date(s).toLocaleDateString('uk-UA',{day:'numeric',month:'short'});
-export default function App(){
- const {width}=useWindowDimensions(); const wide=width>850; const voice=useVoiceInput();
- const [p,setP]=useState<Profile|null>(null),[loaded,setLoaded]=useState(false),[screen,setScreen]=useState('home');
- const [name,setName]=useState(''),[age,setAge]=useState('6'),[interest,setInterest]=useState('Тварини');
- const [sound,setSound]=useState(true),[storageError,setStorageError]=useState(''),[formError,setFormError]=useState('');
- const [session,setSession]=useState<Session|null>(null),[task,setTask]=useState<MathTask>(makeMathTask()),[answer,setAnswer]=useState('');
- const [feedback,setFeedback]=useState(''),[answered,setAnswered]=useState(false),[started,setStarted]=useState<number|null>(null),[seconds,setSeconds]=useState(0),[readDone,setReadDone]=useState(false),[wpm,setWpm]=useState<number|undefined>();
- const [last,setLast]=useState<Result|null>(null),[limit,setLimit]=useState('15'),[pin,setPin]=useState(''),[savedPin,setSavedPin]=useState(''),[unlocked,setUnlocked]=useState(false),[parentMsg,setParentMsg]=useState(''),[resetConfirm,setResetConfirm]=useState(false);
- const sessionStart=useRef(Date.now()),readingStart=useRef<number|null>(null),busy=useRef(false);
- const persist=async(next:Profile)=>{setP(next);try{await AsyncStorage.setItem(KEY,JSON.stringify(next));setStorageError('');}catch{setStorageError('Не вдалося зберегти прогрес. Перевір вільне місце та дозволи браузера.');}};
- useEffect(()=>{(async()=>{try{const v=await AsyncStorage.getItem(KEY);if(v){const a=JSON.parse(v);if(a.name&&a.record&&Array.isArray(a.results))setP(a);}const config=await AsyncStorage.getItem('cazka.settings');if(config){const c=JSON.parse(config);setLimit(String(c.limit||15));setSavedPin(c.pin||'');setSound(c.sound!==false);}}catch{setStorageError('Не вдалося прочитати збережені дані.');}setLoaded(true);})();return()=>{Speech.stop();};},[]);
- useEffect(()=>{if(started===null)return;const t=setInterval(()=>setSeconds(Math.floor((Date.now()-started)/1000)),250);return()=>clearInterval(t);},[started]);
- const say=(text:string)=>{if(!sound)return;voice.stop();Speech.stop();Speech.speak(text,{language:'uk-UA',rate:0.85});};
- const navigate=(s:string)=>{Speech.stop();voice.stop();setScreen(s);setFeedback('');};
- const generate=(record:LearningRecord)=>{const d=nextDifficulty(record.arithmetic);return makeMathTask(d==='hard'?30:d==='medium'?20:10,d==='easy'?2:3);};
- const begin=(kind:Session['kind'],story=p?.completed||0)=>{if(!p)return;busy.current=false;setSession({kind,story:story%3,step:0,correct:0,total:0,errors:[]});sessionStart.current=Date.now();setTask(generate(p.record));setAnswer('');setAnswered(false);setReadDone(false);setStarted(null);readingStart.current=null;setSeconds(0);setWpm(undefined);setFeedback('');navigate(kind==='adventure'?'story':kind==='reading'?'reading':'math');};
- const world=worlds[session?.story||0]; const readingLevel=p?levels[nextDifficulty(p.record.reading)]:0;
- const readingText=world.texts[readingLevel]; const isAssessment=session?.kind==='assessment';
- const finish=async(s:Session)=>{if(!p||busy.current)return;busy.current=true;const r:Result={date:new Date().toISOString(),kind:s.kind,correct:s.correct,total:s.total,errors:s.errors,wpm};const np={...p,results:[r,...p.results].slice(0,100),completed:p.completed+(s.kind==='adventure'?1:0),minutes:p.minutes+Math.max(1,Math.round((Date.now()-sessionStart.current)/60000)),onboarded:p.onboarded||s.kind==='assessment'};await persist(np);setLast(r);setStarted(null);navigate('result');say(s.kind==='adventure'?world.end:'Готово! Твої результати збережені. Дякую за старання!');};
- const checkMath=async()=>{if(!p||!session||answered||busy.current)return;const n=normalizeAnswer(answer);if(n===null){setFeedback('Введи число або скажи його українською.');return;}busy.current=true;const ok=n===task.result;const ns={...session,total:session.total+1,correct:session.correct+(ok?1:0),errors:ok?session.errors:[...session.errors,`${task.spoken}: відповідь ${answer}, правильно ${task.result}`]};setSession(ns);await persist({...p,record:recordAttempt(p.record,'arithmetic',ok)});setAnswered(true);setFeedback(ok?'Правильно! Ще один крок уперед.':`Цього разу відповідь — ${task.result}. Порахуймо разом: ${task.terms.join(' + ')} = ${task.result}.`);say(ok?'Правильно!':`Правильна відповідь ${task.result}. Спробуємо наступне завдання.`);busy.current=false;};
- const nextMath=()=>{if(!p||!session)return;if(session.total>=(isAssessment?3:session.kind==='math'?5:2)){if(session.kind==='math')finish(session);else{navigate('reading');setAnswered(false);setReadDone(false);setStarted(null);readingStart.current=null;setSeconds(0);}}else{setTask(generate(p.record));setAnswer('');setAnswered(false);setFeedback('');}};
- const checkReading=async(i:number)=>{if(!p||!session||answered||busy.current)return;busy.current=true;const ok=i===0;const ns={...session,total:session.total+1,correct:session.correct+(ok?1:0),errors:ok?session.errors:[...session.errors,`Розуміння тексту: ${readingLevel===0?world.easyQ:world.question}`]};setSession(ns);await persist({...p,record:recordAttempt(p.record,'reading',ok)});setAnswered(true);setFeedback(ok?'Саме так! Ти уважно прочитав підказку.':`Відповідь — ${(readingLevel===0?world.easyOpts:world.options)[0]}. Повернися до тексту й знайди підказку.`);busy.current=false;};
- const Button=({children,onPress,secondary=false,disabled=false}:{children:React.ReactNode;onPress:()=>void;secondary?:boolean;disabled?:boolean})=><Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={({pressed})=>[s.button,secondary&&s.secondary,disabled&&{opacity:.45},pressed&&{opacity:.75}]}><Text style={[s.buttonText,secondary&&s.secondaryText]}>{children}</Text></Pressable>;
- const VoiceButton=({onResult}:{onResult:(t:string)=>void})=><Button secondary onPress={()=>{Speech.stop();voice.listening?voice.stop():voice.listen(onResult);}}>{voice.listening?'◼ Зупинити запис':'♩ Відповісти голосом'}</Button>;
- const back=()=>{setStarted(null);readingStart.current=null;setSession(null);navigate('home');};
- const Nav=({id,label,icon}:{id:string;label:string;icon:string})=><Pressable accessibilityRole="button" onPress={()=>{if(id==='parents'){setUnlocked(false);setPin('');setParentMsg('');}navigate(id);}} style={[s.navItem,screen===id&&s.navActive]}><Text style={s.navIcon}>{icon}</Text><Text style={[s.navLabel,screen===id&&{color:'#3B533D'}]}>{label}</Text></Pressable>;
- if(!loaded)return <SafeAreaView style={s.page}><Text style={s.loading}>Відкриваємо Казку…</Text></SafeAreaView>;
- const learning=screen==='story'||screen==='math'||screen==='reading';
- return <SafeAreaView style={s.page}><StatusBar style="dark"/><View style={{flex:1,flexDirection:wide?'row':'column'}}>
- <View style={[s.sidebar,!wide&&s.mobileBar]}><View style={s.logo}><Text style={s.logoMark}>✦</Text><View><Text style={s.logoText}>казка</Text><Text style={s.logoSub}>ТВОЯ МАЛЕНЬКА ПРИГОДА</Text></View></View>{wide&&<><Text style={s.menuCaption}>ТВІЙ СВІТ</Text><Nav id="home" label="Мої пригоди" icon="⌂"/><Nav id="progress" label="Мої відкриття" icon="✧"/><View style={{flex:1}}/><View style={s.sideNote}><Text style={{fontSize:30}}>🌱</Text><Text style={s.sideNoteTitle}>Маленькі кроки.
-</Text><Text style={s.muted}>Щодня дізнавайся щось нове, у своєму темпі.</Text></View><Nav id="parents" label="Для батьків" icon="⚙"/></>}{!wide&&<Pressable accessibilityLabel="Для батьків" onPress={()=>{setUnlocked(false);setPin('');navigate('parents');}}><Text style={{fontSize:24}}>⚙</Text></Pressable>}</View>
- <ScrollView style={{flex:1}} contentContainerStyle={[s.content,{padding:wide?42:20}]}><View style={s.topline}><Text style={s.eyebrow}>{learning?'ЧАС ДЛЯ ВІДКРИТТІВ':'МАЛЕНЬКІ ПРИГОДИ, ВЕЛИКІ ВІДКРИТТЯ'}</Text><Pressable accessibilityRole="button" onPress={()=>{setSound(!sound);Speech.stop();}}><Text style={s.sound}>{sound?'♫ Звук увімкнено':'♫ Без звуку'}</Text></Pressable></View>
- {!p?<><Text style={s.title}>Кожна пригода
-починається з тебе.</Text><Text style={s.subtitle}>Читай, рахуй і відкривай нові світи разом із Руді.</Text><View style={[s.row,{flexDirection:wide?'row':'column'}]}><View style={[s.card,{flex:1,gap:18}]}><Text style={s.sectionTitle}>Познайомимось? 👋</Text><Text style={s.muted}>Я запам’ятаю твоє ім’я та наші відкриття на цьому пристрої.</Text><Text style={s.label}>Як тебе звати?</Text><TextInput accessibilityLabel="Ім’я дитини" style={s.input} value={name} onChangeText={setName} placeholder="Твоє ім’я" maxLength={30}/><VoiceButton onResult={setName}/><Text style={s.label}>Скільки тобі років?</Text><View style={s.chips}>{['4','5','6','7','8','9','10','11','12'].map(a=><Pressable accessibilityRole="button" key={a} onPress={()=>setAge(a)} style={[s.chip,age===a&&s.chipSelected]}><Text style={age===a?{color:'white'}:{color:'#515C4B'}}>{a}</Text></Pressable>)}</View><Text style={s.label}>Що тобі цікаво?</Text><View style={s.chips}>{['Тварини','Космос','Море'].map(a=><Pressable accessibilityRole="button" key={a} style={[s.chip,interest===a&&s.chipSelected]} onPress={()=>setInterest(a)}><Text style={interest===a?{color:'white'}:{color:'#515C4B'}}>{a}</Text></Pressable>)}</View>{!!formError&&<Text style={s.error}>{formError}</Text>}<Button onPress={async()=>{if(!name.trim()){setFormError('Напиши, будь ласка, своє ім’я.');return;}await persist({name:name.trim(),age,interest,record:newRecord(),results:[],completed:0,minutes:0,onboarded:false});setFormError('');}}>Знайомитися з Руді →</Button><Text style={s.small}>Мікрофон вмикається лише після натискання. Аудіозаписи не зберігаються застосунком.</Text></View><View style={[s.welcomeArt,{flex:1}]}><Text style={s.artStars}>✧         ·         ✦</Text><Text style={{fontSize:110}}>🦊</Text><Text style={s.artTitle}>Привіт! Я Руді.</Text><Text style={s.artCopy}>Я поруч, коли складно.
-І радію кожному твоєму відкриттю.</Text><Text style={{fontSize:48,marginTop:24}}>🌿  🍄  🌱</Text></View></View></>
- :screen==='home'?<><View style={s.greeting}><View><Text style={s.title}>Привіт, {p.name} <Text style={{fontSize:30}}>☀</Text></Text><Text style={s.subtitle}>Світ повний історій. Яку відкриємо сьогодні?</Text></View><View style={s.avatar}><Text style={{fontSize:30}}>🦊</Text></View></View>
- {!p.onboarded&&<View style={s.assessment}><View style={{flex:1,minWidth:180}}><Text style={s.sectionTitle}>Спершу — маленьке знайомство</Text><Text style={s.muted}>3 приклади й короткий текст допоможуть обрати твій темп.</Text></View><Button onPress={()=>begin('assessment')}>Спробувати · 3 хв →</Button></View>}
- <Pressable accessibilityRole="button" onPress={()=>begin('adventure',p.interest==='Космос'?1:p.interest==='Море'?2:p.completed)} style={[s.hero,{flexDirection:wide?'row':'column'}]}><View style={{flex:1,gap:18}}><Text style={s.heroBadge}>✦  ТВОЯ НАСТУПНА ПРИГОДА</Text><Text style={s.heroTitle}>{worlds[p.interest==='Космос'?1:p.interest==='Море'?2:p.completed%3].name}</Text><Text style={s.heroCopy}>Загублена підказка, новий друг
-і трохи твоєї кмітливості.</Text><View style={s.heroCTA}><Text style={s.heroCTAText}>Вирушити у пригоду   →</Text></View><Text style={s.heroMeta}>◷  5–10 хвилин     ·     Читання + лічба</Text></View><View style={s.heroArt}><Text style={s.heroMoon}>✧</Text><Text style={{fontSize:112}}>🦊</Text><Text style={{fontSize:54,marginTop:-10}}>🌿 🍄</Text><View style={s.artBubble}><Text style={{color:'#52624A'}}>Ходімо зі мною!</Text></View></View></Pressable>
- <View style={s.sectionHead}><Text style={s.sectionTitle}>Маленька практика</Text><Text style={s.muted}>У своєму темпі</Text></View><View style={[s.row,{flexDirection:wide?'row':'column'}]}>{[{kind:'reading',icon:'📖',title:'Прочитай історію',copy:'Слова складаються у відкриття.',color:'#EAF0E5'},{kind:'math',icon:'🍎',title:'Порахуй подумки',copy:'Слухай, уявляй і знаходь відповідь.',color:'#F7EBDD'}].map(c=><Pressable key={c.kind} accessibilityRole="button" onPress={()=>begin(c.kind as 'reading'|'math')} style={[s.practice,{backgroundColor:c.color}]}><View style={s.practiceTop}><Text style={{fontSize:38}}>{c.icon}</Text><Text style={{fontSize:24,color:'#6B735F'}}>↗</Text></View><Text style={s.practiceTitle}>{c.title}</Text><Text style={s.muted}>{c.copy}</Text><Text style={s.practiceMeta}>БЛИЗЬКО 3 ХВИЛИН</Text></Pressable>)}</View>
- <View style={s.sectionHead}><Text style={s.sectionTitle}>Твоя поличка пригод</Text><Text style={s.muted}>3 світи для відкриттів</Text></View><View style={[s.row,{flexDirection:wide?'row':'column'}]}>{worlds.map((w,i)=><Pressable key={w.name} accessibilityRole="button" onPress={()=>begin('adventure',i)} style={[s.world,{backgroundColor:w.color}]}><Text style={{fontSize:44}}>{w.icon}</Text><Text style={[s.worldTag,{color:w.ink}]}>{w.tag}</Text><Text style={s.worldTitle}>{w.name}</Text><Text style={[s.small,{marginTop:16,color:w.ink}]}>Відкрити історію →</Text></Pressable>)}</View>
- <View style={s.daily}><Text style={{fontSize:30}}>✧</Text><Text style={s.muted}>Ти вже завершив <Text style={s.bold}>{p.completed} пригод</Text> і практикувався <Text style={s.bold}>{p.minutes} хвилин</Text>. Кожен крок має значення.</Text></View></>
- :screen==='story'?<View style={s.lesson}><Pressable onPress={back}><Text style={s.back}>← До моїх пригод</Text></Pressable><Text style={s.lessonIcon}>{world.icon}</Text><Text style={s.eyebrow}>{world.tag}</Text><Text style={s.title}>{world.name}</Text><Text style={s.storyText}>{world.intro.replace('Руді',p.name+' і Руді')}</Text><Button secondary onPress={()=>say(world.intro)}>♫ Послухати історію</Button><Button onPress={()=>navigate('math')}>Знайти першу підказку →</Button></View>
- :screen==='math'&&session?<View style={s.lesson}><Pressable onPress={back}><Text style={s.back}>← Завершити заняття</Text></Pressable><Text style={s.eyebrow}>{isAssessment?'ЗНАЙОМСТВО':session.kind==='adventure'?'ПІДКАЗКА 1 · РАХУЄМО':'ПРАКТИКА · АРИФМЕТИКА'}</Text><View style={s.progressTrack}><View style={[s.progressFill,{width:`${Math.min(100,(session.total/(isAssessment?3:session.kind==='math'?5:2))*100)}%`}]}/></View><Text style={s.lessonIcon}>🍎</Text><Text style={s.title}>Скільки разом?</Text><Text style={s.subtitle}>Руді збирає запаси для друзів. Допоможи порахувати.</Text><View style={s.mathBoard}><Text style={s.equation}>{task.terms.join(' + ')} = ?</Text><Text style={s.muted}>Уяви ці числа й порахуй подумки.</Text></View><Button secondary onPress={()=>say(`Допоможи Руді. Скільки буде ${task.spoken}?`)}>♫ Послухати завдання</Button><TextInput accessibilityLabel="Відповідь на приклад" style={[s.input,{fontSize:26,textAlign:'center'}]} keyboardType="number-pad" value={answer} editable={!answered} onChangeText={setAnswer} placeholder="Твоя відповідь" onSubmitEditing={()=>{if(!answered)checkMath();}}/>{!answered&&<VoiceButton onResult={setAnswer}/>}<Text accessibilityLiveRegion="polite" style={s.feedback}>{feedback}</Text>{answered?<Button onPress={nextMath}>Далі →</Button>:<Button disabled={!answer.trim()} onPress={checkMath}>Перевірити відповідь →</Button>}</View>
- :screen==='reading'&&session?<View style={s.lesson}><Pressable onPress={back}><Text style={s.back}>← Завершити заняття</Text></Pressable><Text style={s.eyebrow}>{isAssessment?'ЗНАЙОМСТВО · ЧИТАННЯ':'ПІДКАЗКА · ЧИТАННЯ'}</Text><Text style={s.lessonIcon}>📖</Text><Text style={s.title}>Записка для тебе</Text><Text style={s.subtitle}>Натисни «Почати», прочитай уголос, а потім зупини таймер.</Text><View style={s.readingBoard}><Text style={s.readingText}>{readingText}</Text></View><Text style={s.timer}>◷ {Math.floor(seconds/60)}:{String(seconds%60).padStart(2,'0')}</Text>{!readDone?<Button onPress={()=>{if(readingStart.current===null){Speech.stop();const now=Date.now();readingStart.current=now;setStarted(now);}else{const elapsed=Math.max(1,(Date.now()-readingStart.current)/1000);setSeconds(Math.round(elapsed));setWpm(Math.round(readingText.split(/\s+/).length*60/elapsed));setStarted(null);setReadDone(true);setAnswered(false);setFeedback('');}}}>{started===null?'Почати читання →':'Я прочитав · зупинити'}</Button>:<><Text style={s.sectionTitle}>{readingLevel===0?world.easyQ:world.question}</Text>{[1,0,2].map(i=>({o:(readingLevel===0?world.easyOpts:world.options)[i],i})).map(({o,i})=><Button secondary key={o} disabled={answered} onPress={()=>checkReading(i)}>{o}</Button>)}<Text accessibilityLiveRegion="polite" style={s.feedback}>{feedback}</Text>{answered&&<Button onPress={()=>finish(session)}>Завершити {session.kind==='adventure'?'пригоду':'заняття'} →</Button>}<Text style={s.small}>Темп обчислюється за таймером. Правильність вимови має перевірити дорослий.</Text></>}</View>
- :screen==='result'&&last?<View style={s.lesson}><Text style={{fontSize:82,textAlign:'center'}}>🌟</Text><Text style={[s.title,{textAlign:'center'}]}>Ще одне відкриття!</Text><Text style={s.storyText}>{last.kind==='adventure'?world.end:`${p.name}, дякую за старання. Наступні завдання врахують твої відповіді.`}</Text><View style={s.stats}><View><Text style={s.statNumber}>{last.correct}/{last.total}</Text><Text style={s.muted}>правильних відповідей</Text></View>{last.wpm!==undefined&&<View><Text style={s.statNumber}>{last.wpm}</Text><Text style={s.muted}>слів / хв · за таймером</Text></View>}</View><Button onPress={back}>До моїх пригод →</Button><Button secondary onPress={()=>navigate('progress')}>Подивитися відкриття</Button></View>
- :screen==='progress'?<><Text style={s.title}>Твої відкриття ✧</Text><Text style={s.subtitle}>Тут живуть твої маленькі й великі кроки.</Text><View style={s.stats}>{[{n:p.completed,t:'пригод завершено'},{n:p.record.arithmetic.correct,t:'прикладів розв’язано'},{n:p.record.reading.correct,t:'текстів зрозуміло'}].map(x=><View key={x.t}><Text style={s.statNumber}>{x.n}</Text><Text style={s.muted}>{x.t}</Text></View>)}</View><Text style={s.sectionTitle}>Історія занять</Text>{!p.results.length?<View style={s.card}><Text style={s.muted}>Твоя перша історія ще попереду.</Text><Button onPress={()=>begin('assessment')}>Почати знайомство →</Button></View>:p.results.map((r,i)=><View key={i} style={s.history}><Text style={{fontSize:28}}>{r.kind==='math'?'🍎':r.kind==='adventure'?'🌳':'📖'}</Text><View style={{flex:1}}><Text style={s.historyTitle}>{{adventure:'Пригода',math:'Арифметика',reading:'Читання',assessment:'Перше знайомство'}[r.kind]||'Заняття'}</Text><Text style={s.muted}>{formatDate(r.date)} · {r.correct} із {r.total} відповідей{r.wpm!==undefined?` · ${r.wpm} слів/хв`:''}</Text></View><Text style={{color:'#527347',fontSize:22}}>✧</Text></View>)}</>
- :screen==='parents'?<><Text style={s.title}>Для батьків</Text><Text style={s.subtitle}>Прогрес, темп і налаштування вашої дитини.</Text>{!unlocked?<View style={s.card}><Text style={s.sectionTitle}>{savedPin?'Введіть батьківський PIN':'Встановіть батьківський PIN'}</Text><Text style={s.muted}>{savedPin?'Він відкриває результати та налаштування.':'4 цифри, щоб дитина випадково не змінила налаштування. PIN діє на цьому пристрої.'}</Text><TextInput accessibilityLabel="Батьківський PIN" secureTextEntry keyboardType="number-pad" maxLength={4} value={pin} onChangeText={setPin} style={s.input} placeholder="4 цифри"/><Button onPress={async()=>{if(!/^\d{4}$/.test(pin)){setParentMsg('Введіть рівно 4 цифри.');return;}if(savedPin&&savedPin!==pin){setParentMsg('PIN не збігається.');return;}try{if(!savedPin){await AsyncStorage.setItem('cazka.settings',JSON.stringify({limit:Number(limit),pin,sound}));setSavedPin(pin);}setUnlocked(true);setParentMsg('');}catch{setParentMsg('Не вдалося зберегти PIN.');}}}>{savedPin?'Відкрити':'Зберегти PIN і відкрити'}</Button><Text style={s.error}>{parentMsg}</Text></View>:<><View style={s.card}><Text style={s.sectionTitle}>{p.name} · {p.age} років</Text><Text style={s.muted}>Інтерес: {p.interest}. Завершено пригод: {p.completed}.</Text>{(['reading','arithmetic'] as const).map(k=><View key={k} style={s.setting}><Text style={s.label}>{k==='reading'?'Читання':'Арифметика'}</Text><Text style={s.muted}>{p.record[k].correct} / {p.record[k].attempts} · {{easy:'Початковий',medium:'Середній',hard:'Складніший'}[nextDifficulty(p.record[k])]}</Text></View>)}<Text style={s.small}>Рівень змінюється за правильністю відповідей. Темп читання — оцінка за таймером, без автоматичної перевірки вимови.</Text></View><View style={s.card}><Text style={s.sectionTitle}>Комфортне заняття</Text><Text style={s.label}>Нагадати про перерву після</Text><View style={s.chips}>{['10','15','20'].map(v=><Pressable key={v} style={[s.chip,limit===v&&s.chipSelected]} onPress={()=>setLimit(v)}><Text style={limit===v?{color:'white'}:{}}>{v} хв</Text></Pressable>)}</View><Button onPress={async()=>{try{await AsyncStorage.setItem('cazka.settings',JSON.stringify({limit:Number(limit),pin:savedPin,sound}));setParentMsg('Налаштування збережено.');}catch{setParentMsg('Не вдалося зберегти.');}}}>Зберегти налаштування</Button><Text style={s.muted}>{parentMsg}</Text></View><View style={s.card}><Text style={s.sectionTitle}>Що варто повторити</Text>{p.results.flatMap(r=>r.errors).slice(0,10).map((e,i)=><Text key={i} style={s.muted}>• {e}</Text>)}{!p.results.some(r=>r.errors.length>0)&&<Text style={s.muted}>Помилок у завершених заняттях поки немає.</Text>}<Button secondary onPress={()=>begin('assessment')}>Пройти перевірку ще раз</Button></View><View style={s.card}><Text style={s.sectionTitle}>Пам’ять і голос</Text><Text style={s.muted}>Профіль та результати зберігаються лише на цьому пристрої. Це навчальні пригоди за готовими сюжетами. Вільний AI-діалог і синхронізація ще не підключені.</Text><Text style={s.muted}>Голосове розпізнавання працює у сумісному браузері та може використовувати сервіс виробника браузера. Застосунок не зберігає аудіозаписи.</Text><Button secondary onPress={()=>{if(!resetConfirm){setResetConfirm(true);return;}AsyncStorage.removeItem(KEY).then(()=>{setP(null);setResetConfirm(false);navigate('home');}).catch(()=>setParentMsg('Не вдалося видалити профіль.'));}}>{resetConfirm?'Підтвердити видалення профілю та результатів':'Очистити профіль на цьому пристрої'}</Button>{resetConfirm&&<Button secondary onPress={()=>setResetConfirm(false)}>Скасувати</Button>}</View></>}</>
- :null}
- {learning&&Date.now()-sessionStart.current>Number(limit)*60000&&<View style={s.assessment}><Text style={s.muted}>Час трохи відпочити. Збережені відповіді залишаться у твоєму прогресі.</Text><Button onPress={back}>Зробити перерву</Button></View>}
- {!!voice.error&&<Text accessibilityLiveRegion="polite" style={s.error}>{voice.error}</Text>}{!!storageError&&<Text style={s.error}>{storageError}</Text>}
- <View style={s.footer}><Text style={s.footerLogo}>✦ казка</Text><Text style={s.small}>Тут можна помилятися. І пробувати знову.</Text></View>
- </ScrollView>{!wide&&p&&<View style={s.bottomNav}><Nav id="home" label="Пригоди" icon="⌂"/><Nav id="progress" label="Відкриття" icon="✧"/></View>}</View></SafeAreaView>;
+const formatDate = (d: string) => new Date(d).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' });
+const KIND_TITLE: Record<ResultKind, string> = { adventure: 'Пригода', math: 'Математична майстерня', reading: 'Читання', assessment: 'Перше знайомство' };
+const KIND_ICON: Record<ResultKind, string> = { adventure: '🗺️', math: '🔢', reading: '📖', assessment: '👋' };
+
+export default function App() {
+  const { width } = useWindowDimensions();
+  const wide = width > 850;
+  const voice = useVoiceInput();
+
+  const [p, setP] = useState<Profile | null>(null);
+  const pRef = useRef<Profile | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [screen, setScreen] = useState<Screen>('home');
+  const [sound, setSound] = useState(true);
+  const [storageError, setStorageError] = useState('');
+
+  const [name, setName] = useState(''), [age, setAge] = useState('6'), [interest, setInterest] = useState('Тварини'), [formError, setFormError] = useState('');
+  const [limit, setLimit] = useState('15'), [pin, setPin] = useState(''), [savedPin, setSavedPin] = useState('');
+  const [unlocked, setUnlocked] = useState(false), [parentMsg, setParentMsg] = useState(''), [resetConfirm, setResetConfirm] = useState(false);
+
+  const [session, setSessionState] = useState<Session | null>(null);
+  const sessionRef = useRef<Session | null>(null);
+  const [story, setStory] = useState<Story>(STORIES[0]);
+  const [task, setTask] = useState<MathTask | null>(null);
+  const [step, setStep] = useState(0);
+  const [assessPhase, setAssessPhase] = useState<'math' | 'read'>('math');
+  const [readingStory, setReadingStory] = useState<Story>(STORIES[0]);
+  const [levelUp, setLevelUp] = useState('');
+  const [last, setLast] = useState<{ result: Result; ending?: string; sticker?: Story['sticker']; newSticker?: boolean } | null>(null);
+  const finishing = useRef(false);
+  const scrollRef = useRef<ScrollView>(null);
+  const scrollTop = () => scrollRef.current?.scrollTo({ y: 0, animated: false });
+
+  const setSession = (next: Session | null) => { sessionRef.current = next; setSessionState(next); };
+
+  const update = async (fn: (old: Profile) => Profile) => {
+    if (!pRef.current) return;
+    const next = fn(pRef.current);
+    pRef.current = next; setP(next);
+    try { await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(next)); setStorageError(''); }
+    catch { setStorageError('Не вдалося зберегти прогрес. Перевір вільне місце та дозволи браузера.'); }
+  };
+  const saveSettings = (extra: Partial<{ limit: number; pin: string; sound: boolean }> = {}) =>
+    AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ limit: Number(limit), pin: savedPin, sound, ...extra }));
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const v = await AsyncStorage.getItem(PROFILE_KEY);
+        if (v) { const m = migrate(JSON.parse(v)); if (m) { pRef.current = m; setP(m); } }
+        const config = await AsyncStorage.getItem(SETTINGS_KEY);
+        if (config) { const c = JSON.parse(config); setLimit(String(c.limit || 15)); setSavedPin(c.pin || ''); setSound(c.sound !== false); }
+      } catch { setStorageError('Не вдалося прочитати збережені дані.'); }
+      setLoaded(true);
+    })();
+    return () => { Speech.stop(); };
+  }, []);
+
+  const say = (text: string) => { if (!sound) return; voice.stop(); Speech.stop(); Speech.speak(text, { language: 'uk-UA', rate: 0.85 }); };
+  const navigate = (next: Screen) => { Speech.stop(); voice.stop(); setScreen(next); scrollTop(); };
+
+  // ---------- заняття ----------
+  const begin = (kind: ResultKind, chosen?: Story) => {
+    const prof = pRef.current; if (!prof) return;
+    finishing.current = false; setLevelUp(''); setStep(0);
+    setSession({ kind, storyId: chosen?.id, correct: 0, total: 0, errors: [], stars: 0, mathCorrect: 0, streak: 0, startedAt: Date.now() });
+    if (kind === 'adventure') { setStory(chosen ?? nextStory(prof.interest, prof.stickers, prof.completed)); navigate('story'); }
+    if (kind === 'math') { setTask(makeTask(prof.mathLevel)); navigate('math'); }
+    if (kind === 'assessment') { setAssessPhase('math'); setTask(makeTask(ASSESS_PLAN[0].level, Math.random, { kind: ASSESS_PLAN[0].kind })); navigate('assessment'); }
+    if (kind === 'reading') {
+      const count = prof.results.filter(r => r.kind === 'reading').length;
+      setReadingStory(STORIES[(count + prof.completed) % STORIES.length]); navigate('reading');
+    }
+  };
+
+  const recordMath = (t: MathTask, ok: boolean, given: string) => {
+    const ses = sessionRef.current; if (!ses) return;
+    const streak = ok ? ses.streak + 1 : 0;
+    setSession({ ...ses, total: ses.total + 1, correct: ses.correct + (ok ? 1 : 0), mathCorrect: ses.mathCorrect + (ok ? 1 : 0), stars: ses.stars + (ok ? 1 : 0), streak,
+      errors: ok ? ses.errors : [...ses.errors, `${t.label}: відповідь ${given}, правильно ${t.answer}`] });
+    update(old => {
+      const adapted = ses.kind === 'assessment' ? { level: old.mathLevel, history: old.mathHistory } : adaptLevel(old.mathLevel, old.mathHistory, ok);
+      if (adapted.level > old.mathLevel) setLevelUp(`🚀 Новий рівень: ${LEVELS[adapted.level].title}!`);
+      else if (adapted.level < old.mathLevel) setLevelUp(`🌱 Трохи потренуємось: ${LEVELS[adapted.level].title}`);
+      return { ...old, record: recordAttempt(old.record, 'arithmetic', ok), mathLevel: adapted.level, mathHistory: adapted.history,
+        stars: old.stars + (ok ? 1 : 0), bestStreak: Math.max(old.bestStreak, streak) };
+    });
+  };
+
+  const recordReading = (ok: boolean, label: string, wpm?: number) => {
+    const ses = sessionRef.current; if (!ses) return;
+    setSession({ ...ses, total: ses.total + 1, correct: ses.correct + (ok ? 1 : 0), stars: ses.stars + (ok ? 1 : 0), wpm: wpm ?? ses.wpm,
+      errors: ok ? ses.errors : [...ses.errors, `Розуміння тексту — ${label}`] });
+    update(old => ({ ...old, record: recordAttempt(old.record, 'reading', ok), stars: old.stars + (ok ? 1 : 0) }));
+  };
+
+  const finish = async (choice = '') => {
+    const ses = sessionRef.current, prof = pRef.current;
+    if (!ses || !prof || finishing.current) return;
+    finishing.current = true;
+    const result: Result = { date: new Date().toISOString(), kind: ses.kind, correct: ses.correct, total: ses.total, errors: ses.errors, wpm: ses.wpm, stars: ses.stars, storyId: ses.storyId ?? (ses.kind === 'adventure' ? story.id : undefined) };
+    const isAdventure = ses.kind === 'adventure';
+    const newSticker = isAdventure && !prof.stickers.includes(story.id);
+    await update(old => ({
+      ...old,
+      results: [result, ...old.results].slice(0, 100),
+      completed: old.completed + (isAdventure ? 1 : 0),
+      stickers: newSticker ? [...old.stickers, story.id] : old.stickers,
+      minutes: old.minutes + Math.max(1, Math.round((Date.now() - ses.startedAt) / 60000)),
+      onboarded: old.onboarded || ses.kind === 'assessment',
+      mathLevel: ses.kind === 'assessment' ? levelFromAssessment(ses.mathCorrect) : old.mathLevel,
+      mathHistory: ses.kind === 'assessment' ? [] : old.mathHistory,
+    }));
+    const ending = isAdventure ? fillName(story.ending, prof.name, choice) : undefined;
+    setLast({ result, ending, sticker: isAdventure ? story.sticker : undefined, newSticker });
+    navigate('result');
+    say(ending ?? `Готово! Сьогодні ти заробляєш ${ses.stars} зірочок. Дякую за старання!`);
+  };
+
+  const back = () => { setSession(null); navigate('home'); };
+
+  // ---------- маленькі частини інтерфейсу ----------
+  const VoiceButton = ({ onResult }: { onResult: (t: string) => void }) =>
+    <Button secondary onPress={() => { Speech.stop(); voice.listening ? voice.stop() : voice.listen(onResult); }}>{voice.listening ? '◼ Зупинити запис' : '🎤 Сказати голосом'}</Button>;
+  const Nav = ({ id, label, icon }: { id: Screen; label: string; icon: string }) =>
+    <Pressable accessibilityRole="button" onPress={() => { if (id === 'parents') { setUnlocked(false); setPin(''); setParentMsg(''); } navigate(id); }} style={[s.navItem, screen === id && s.navActive]}>
+      <Text style={s.navIcon}>{icon}</Text><Text style={[s.navLabel, screen === id && { color: '#3B533D' }]}>{label}</Text>
+    </Pressable>;
+  const Chip = ({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) =>
+    <Pressable accessibilityRole="button" onPress={onPress} style={[s.chip, active && s.chipSelected]}><Text style={active ? { color: 'white' } : { color: '#515C4B' }}>{label}</Text></Pressable>;
+  const Pill = ({ children }: { children: React.ReactNode }) =>
+    <View style={{ backgroundColor: '#FFF6DB', borderRadius: 30, paddingVertical: 8, paddingHorizontal: 14 }}><Text style={{ fontSize: 15, fontWeight: '700', color: '#8A6A1E' }}>{children}</Text></View>;
+  const SessionBar = ({ total, label }: { total: number; label: string }) => {
+    const ses = session;
+    const done = ses?.total ?? 0;
+    return <View style={{ gap: 10 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <Text style={s.eyebrow}>{label} · {Math.min(done + 1, total)} / {total}</Text>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          {!!ses && ses.streak >= 2 && <Pill>🔥 {ses.streak} поспіль</Pill>}
+          <Pill>⭐ {ses?.stars ?? 0}</Pill>
+        </View>
+      </View>
+      <View style={s.progressTrack}><View style={[s.progressFill, { width: `${Math.min(100, done / total * 100)}%` }]} /></View>
+    </View>;
+  };
+
+  if (!loaded) return <SafeAreaView style={s.page}><Text style={s.loading}>Відкриваємо Казку…</Text></SafeAreaView>;
+  const learning = ['story', 'math', 'reading', 'assessment'].includes(screen);
+  const next = p ? nextStory(p.interest, p.stickers, p.completed) : STORIES[0];
+  const rLevel = p ? readingLevel(p) : 0;
+
+  // ---------- екрани ----------
+  const renderOnboarding = () => <>
+    <Text style={s.title}>Кожна пригода{'\n'}починається з тебе.</Text>
+    <Text style={s.subtitle}>Читай, рахуй і відкривай нові світи разом із Руді.</Text>
+    <View style={[s.row, { flexDirection: wide ? 'row' : 'column' }]}>
+      <View style={[s.card, { flex: 1 }]}>
+        <Text style={s.sectionTitle}>Познайомимось? 👋</Text>
+        <Text style={s.muted}>Я запам’ятаю твоє ім’я та наші відкриття на цьому пристрої.</Text>
+        <Text style={s.label}>Як тебе звати?</Text>
+        <TextInput accessibilityLabel="Ім’я дитини" style={s.input} value={name} onChangeText={setName} placeholder="Твоє ім’я" maxLength={30} />
+        <VoiceButton onResult={setName} />
+        <Text style={s.label}>Скільки тобі років?</Text>
+        <View style={s.chips}>{['5', '6', '7', '8', '9'].map(a => <Chip key={a} label={a} active={age === a} onPress={() => setAge(a)} />)}</View>
+        <Text style={s.label}>Що тобі найцікавіше?</Text>
+        <View style={s.chips}>{INTERESTS.map(i => <Chip key={i.name} label={`${i.emoji} ${i.name}`} active={interest === i.name} onPress={() => setInterest(i.name)} />)}</View>
+        {!!formError && <Text style={s.error}>{formError}</Text>}
+        <Button big onPress={async () => {
+          if (!name.trim()) { setFormError('Напиши, будь ласка, своє ім’я.'); return; }
+          const prof = newProfile(name.trim(), age, interest);
+          pRef.current = prof; setP(prof); setFormError('');
+          try { await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(prof)); } catch { setStorageError('Не вдалося зберегти профіль.'); }
+        }}>Знайомитися з Руді →</Button>
+        <Text style={s.small}>Мікрофон вмикається лише після натискання. Аудіозаписи не зберігаються застосунком.</Text>
+      </View>
+      <View style={[s.welcomeArt, { flex: 1 }]}>
+        <Text style={s.artStars}>✧         ·         ✦</Text>
+        <Text style={{ fontSize: 110 }}>🦊</Text>
+        <Text style={s.artTitle}>Привіт! Я Руді.</Text>
+        <Text style={s.artCopy}>Я поруч, коли складно.{'\n'}І радію кожному твоєму відкриттю.</Text>
+        <Text style={{ fontSize: 40, marginTop: 24 }}>🪐 🦕 🐙 🐉 🚂</Text>
+      </View>
+    </View>
+  </>;
+
+  const renderHome = (prof: Profile) => <>
+    <View style={[s.greeting, { flexWrap: 'wrap', gap: 12 }]}>
+      <View style={{ flexShrink: 1 }}>
+        <Text style={s.title}>Привіт, {prof.name} <Text style={{ fontSize: 30 }}>☀</Text></Text>
+        <Text style={s.subtitle}>Світ повний історій. Яку відкриємо сьогодні?</Text>
+      </View>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <Pill>⭐ {prof.stars}</Pill>
+        <Pill>🏅 {prof.stickers.length}/{STORIES.length}</Pill>
+      </View>
+    </View>
+
+    {!prof.onboarded && <View style={s.assessment}>
+      <View style={{ flex: 1, minWidth: 180 }}><Text style={s.sectionTitle}>Спершу — маленьке знайомство</Text><Text style={s.muted}>4 приклади й короткий текст допоможуть обрати твій рівень.</Text></View>
+      <Button onPress={() => begin('assessment')}>Спробувати · 3 хв →</Button>
+    </View>}
+
+    <Pressable accessibilityRole="button" onPress={() => begin('adventure', next)} style={[s.hero, { flexDirection: wide ? 'row' : 'column', backgroundColor: next.color }]}>
+      <View style={{ flex: 1, gap: 16 }}>
+        <Text style={[s.heroBadge, { color: next.ink }]}>✦  {prof.stickers.includes(next.id) ? 'ПРОЙДИ ЗНОВУ' : 'ТВОЯ НАСТУПНА ПРИГОДА'}</Text>
+        <Text style={s.heroTitle}>{next.name}</Text>
+        <Text style={s.heroCopy}>{next.blurb} Тебе чекають вибір шляху, задачки й таємна записка.</Text>
+        <View style={s.heroCTA}><Text style={s.heroCTAText}>Вирушити у пригоду   →</Text></View>
+        <Text style={s.heroMeta}>◷  7–10 хвилин   ·   7 кроків   ·   нагорода: наліпка {next.sticker.emoji}</Text>
+      </View>
+      <View style={s.heroArt}>
+        <Text style={s.heroMoon}>✧</Text>
+        <Text style={{ fontSize: 112 }}>{next.hero}</Text>
+        <Text style={{ fontSize: 46, marginTop: -6 }}>{next.icon}</Text>
+        <View style={s.artBubble}><Text style={{ color: '#52624A' }}>Ходімо зі мною!</Text></View>
+      </View>
+    </Pressable>
+
+    <View style={s.sectionHead}><Text style={s.sectionTitle}>Маленька практика</Text><Text style={s.muted}>У своєму темпі</Text></View>
+    <View style={[s.row, { flexDirection: wide ? 'row' : 'column' }]}>
+      <Pressable accessibilityRole="button" onPress={() => begin('math')} style={[s.practice, { backgroundColor: '#F7EBDD' }]}>
+        <View style={s.practiceTop}><Text style={{ fontSize: 38 }}>🔢</Text><Text style={{ fontSize: 24, color: '#6B735F' }}>↗</Text></View>
+        <Text style={s.practiceTitle}>Математична майстерня</Text>
+        <Text style={s.muted}>Будиночки чисел, загадкові числа, задачі й порівняння.</Text>
+        <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center', marginTop: 8 }}>
+          {[1, 2, 3, 4, 5].map(l => <View key={l} style={{ width: 22, height: 8, borderRadius: 4, backgroundColor: l <= prof.mathLevel ? '#D99A4E' : '#EAD9C2' }} />)}
+          <Text style={[s.small, { marginLeft: 6 }]}>Рівень {prof.mathLevel} · {LEVELS[prof.mathLevel].title}</Text>
+        </View>
+      </Pressable>
+      <Pressable accessibilityRole="button" onPress={() => begin('reading')} style={[s.practice, { backgroundColor: '#EAF0E5' }]}>
+        <View style={s.practiceTop}><Text style={{ fontSize: 38 }}>📖</Text><Text style={{ fontSize: 24, color: '#6B735F' }}>↗</Text></View>
+        <Text style={s.practiceTitle}>Прочитай історію</Text>
+        <Text style={s.muted}>Короткі записки від героїв казок і питання до них.</Text>
+        <Text style={s.practiceMeta}>БЛИЗЬКО 3 ХВИЛИН</Text>
+      </Pressable>
+    </View>
+
+    <View style={s.sectionHead}><Text style={s.sectionTitle}>Твоя поличка пригод</Text><Text style={s.muted}>{prof.stickers.length} з {STORIES.length} пройдено</Text></View>
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 14 }}>
+      {STORIES.map(w => {
+        const done = prof.stickers.includes(w.id);
+        return <Pressable key={w.id} accessibilityRole="button" onPress={() => begin('adventure', w)}
+          style={({ pressed }) => [s.world, { backgroundColor: w.color, flexBasis: wide ? '30%' : '46%', flexGrow: 1, minHeight: 170 }, pressed && { opacity: .85 }]}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <Text style={{ fontSize: 40 }}>{w.icon}</Text>
+            {done && <Text style={{ fontSize: 26 }}>{w.sticker.emoji}</Text>}
+          </View>
+          <Text style={[s.worldTag, { color: w.ink }]}>{w.tag}</Text>
+          <Text style={s.worldTitle}>{w.name}</Text>
+          <Text style={[s.small, { color: w.ink }]}>{done ? '✓ Пройдено · ще раз →' : 'Відкрити історію →'}</Text>
+        </Pressable>;
+      })}
+    </View>
+    <View style={s.daily}><Text style={{ fontSize: 30 }}>✧</Text><Text style={[s.muted, { flex: 1 }]}>Пройдено пригод: <Text style={s.bold}>{prof.completed}</Text>, хвилин практики: <Text style={s.bold}>{prof.minutes}</Text>, найдовша серія правильних відповідей: <Text style={s.bold}>{prof.bestStreak}</Text>. Кожен крок має значення.</Text></View>
+  </>;
+
+  const renderMath = (prof: Profile) => task && <View style={s.lesson}>
+    <Pressable onPress={back}><Text style={s.back}>← Завершити заняття</Text></Pressable>
+    <SessionBar total={PRACTICE_LENGTH} label={`МАЙСТЕРНЯ · РІВЕНЬ ${prof.mathLevel}`} />
+    {!!levelUp && <Celebrate text={levelUp} emoji="🏆" />}
+    <MathCard key={task.id} task={task} say={say} voice={voice}
+      onResolved={(ok, given) => recordMath(task, ok, given)}
+      nextLabel={(session?.total ?? 0) >= PRACTICE_LENGTH ? 'Завершити 🏁' : 'Далі →'}
+      onNext={() => { setLevelUp(''); if ((sessionRef.current?.total ?? 0) >= PRACTICE_LENGTH) finish(); else { setTask(makeTask(pRef.current!.mathLevel)); scrollTop(); } }} />
+  </View>;
+
+  const renderAssessment = () => {
+    const read = STORIES[0].scenes.find(x => x.type === 'read');
+    return <View style={s.lesson}>
+      <Pressable onPress={back}><Text style={s.back}>← Завершити знайомство</Text></Pressable>
+      <SessionBar total={ASSESS_PLAN.length + 1} label="ЗНАЙОМСТВО" />
+      {assessPhase === 'math' && task && <MathCard key={task.id} task={task} say={say} voice={voice}
+        onResolved={(ok, given) => recordMath(task, ok, given)}
+        onNext={() => {
+          const n = step + 1;
+          if (n >= ASSESS_PLAN.length) { setAssessPhase('read'); scrollTop(); return; }
+          setStep(n); setTask(makeTask(ASSESS_PLAN[n].level, Math.random, { kind: ASSESS_PLAN[n].kind })); scrollTop();
+        }} />}
+      {assessPhase === 'read' && read?.type === 'read' && <ReadingCard passage={read.passages[1]} question={read.main} say={say}
+        onResolved={(ok, wpm) => recordReading(ok, read.main.q, wpm)} onNext={() => finish()} nextLabel="Завершити знайомство 🏁" />}
+    </View>;
+  };
+
+  const renderReading = () => {
+    const read = readingStory.scenes.find(x => x.type === 'read');
+    if (!read || read.type !== 'read') return null;
+    const q = rLevel === 0 ? read.easy : read.main;
+    return <View style={s.lesson}>
+      <Pressable onPress={back}><Text style={s.back}>← Завершити заняття</Text></Pressable>
+      <Text style={s.eyebrow}>ЧИТАННЯ · {readingStory.tag}</Text>
+      <Text style={{ fontSize: 60, textAlign: 'center' }}>{read.art}</Text>
+      <Text style={[s.subtitle, { fontSize: 18 }]}>{read.text}</Text>
+      <ReadingCard passage={read.passages[rLevel]} question={q} say={say}
+        onResolved={(ok, wpm) => recordReading(ok, `«${readingStory.name}»: ${q.q}`, wpm)} onNext={() => finish()} nextLabel="Завершити 🏁" />
+    </View>;
+  };
+
+  const renderResult = (prof: Profile) => last && <View style={s.lesson}>
+    {last.sticker ? <>
+      <Celebrate text={last.newSticker ? 'Нова наліпка в альбомі!' : 'Пригоду пройдено ще раз!'} emoji={`🎉 ${last.sticker.emoji} 🎉`} />
+      <Text style={{ fontSize: 110, textAlign: 'center' }}>{last.sticker.emoji}</Text>
+      <Text style={[s.title, { textAlign: 'center' }]}>{last.sticker.name}</Text>
+      <Text style={s.storyText}>{last.ending}</Text>
+    </> : <>
+      <Text style={{ fontSize: 82, textAlign: 'center' }}>🌟</Text>
+      <Text style={[s.title, { textAlign: 'center' }]}>Ще одне відкриття!</Text>
+      <Text style={s.storyText}>{prof.name}, дякую за старання. {last.result.kind === 'assessment' ? `Твій рівень математики: «${LEVELS[prof.mathLevel].title}».` : 'Наступні завдання врахують твої відповіді.'}</Text>
+    </>}
+    <View style={s.stats}>
+      <View><Text style={s.statNumber}>⭐ {last.result.stars ?? 0}</Text><Text style={s.muted}>зірочок за заняття</Text></View>
+      <View><Text style={s.statNumber}>{last.result.correct}/{last.result.total}</Text><Text style={s.muted}>з першої спроби</Text></View>
+      {last.result.wpm !== undefined && <View><Text style={s.statNumber}>{last.result.wpm}</Text><Text style={s.muted}>слів / хв · за таймером</Text></View>}
+    </View>
+    {last.result.kind === 'adventure' && <Button big onPress={() => begin('adventure', nextStory(prof.interest, prof.stickers, prof.completed))}>Наступна пригода →</Button>}
+    <Button secondary={last.result.kind === 'adventure'} onPress={back}>До моїх пригод</Button>
+    <Button secondary onPress={() => navigate('progress')}>Мій альбом наліпок 🏅</Button>
+  </View>;
+
+  const renderProgress = (prof: Profile) => <>
+    <Text style={s.title}>Твої відкриття ✧</Text>
+    <Text style={s.subtitle}>Тут живуть твої зірочки, наліпки й маленькі кроки.</Text>
+    <View style={s.stats}>
+      {[{ n: `⭐ ${prof.stars}`, t: 'зірочок' }, { n: prof.completed, t: 'пригод завершено' }, { n: prof.record.arithmetic.correct, t: 'прикладів розв’язано' }, { n: prof.record.reading.correct, t: 'текстів зрозуміло' }]
+        .map(x => <View key={x.t}><Text style={s.statNumber}>{x.n}</Text><Text style={s.muted}>{x.t}</Text></View>)}
+    </View>
+    <View style={s.sectionHead}><Text style={s.sectionTitle}>Альбом наліпок 🏅</Text><Text style={s.muted}>{prof.stickers.length} з {STORIES.length}</Text></View>
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
+      {STORIES.map(st => {
+        const got = prof.stickers.includes(st.id);
+        return <Pressable key={st.id} accessibilityRole="button" onPress={() => begin('adventure', st)}
+          style={{ width: 120, padding: 14, borderRadius: 20, alignItems: 'center', gap: 6, backgroundColor: got ? st.color : '#F1F2EC', borderWidth: 2, borderColor: got ? 'transparent' : '#E3E5DA', borderStyle: got ? 'solid' : 'dashed' }}>
+          <Text style={{ fontSize: 46, opacity: got ? 1 : .25 }}>{got ? st.sticker.emoji : '❔'}</Text>
+          <Text style={[s.small, { textAlign: 'center', color: got ? st.ink : '#A3A897' }]}>{got ? st.sticker.name : st.name}</Text>
+        </Pressable>;
+      })}
+    </View>
+    <View style={s.card}>
+      <Text style={s.sectionTitle}>Математика: рівень {prof.mathLevel} з 5</Text>
+      <View style={{ gap: 8 }}>
+        {([1, 2, 3, 4, 5] as MathLevel[]).map(l => <Text key={l} style={[s.muted, l === prof.mathLevel && s.bold]}>{l < prof.mathLevel ? '✅' : l === prof.mathLevel ? '👉' : '🔒'}  {LEVELS[l].title}</Text>)}
+      </View>
+    </View>
+    <Text style={s.sectionTitle}>Історія занять</Text>
+    {!prof.results.length ? <View style={s.card}><Text style={s.muted}>Твоя перша історія ще попереду.</Text><Button onPress={() => begin('assessment')}>Почати знайомство →</Button></View>
+      : prof.results.slice(0, 30).map((r, i) => <View key={i} style={s.history}>
+        <Text style={{ fontSize: 28 }}>{r.storyId ? storyById(r.storyId).icon : KIND_ICON[r.kind]}</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={s.historyTitle}>{r.storyId ? storyById(r.storyId).name : KIND_TITLE[r.kind] || 'Заняття'}</Text>
+          <Text style={s.muted}>{formatDate(r.date)} · {r.correct} із {r.total} з першої спроби{r.stars !== undefined ? ` · ⭐ ${r.stars}` : ''}{r.wpm !== undefined ? ` · ${r.wpm} слів/хв` : ''}</Text>
+        </View>
+      </View>)}
+  </>;
+
+  const renderParents = (prof: Profile) => <>
+    <Text style={s.title}>Для батьків</Text>
+    <Text style={s.subtitle}>Прогрес, рівень і налаштування вашої дитини.</Text>
+    {!unlocked ? <View style={s.card}>
+      <Text style={s.sectionTitle}>{savedPin ? 'Введіть батьківський PIN' : 'Встановіть батьківський PIN'}</Text>
+      <Text style={s.muted}>{savedPin ? 'Він відкриває результати та налаштування.' : '4 цифри, щоб дитина випадково не змінила налаштування. PIN діє на цьому пристрої.'}</Text>
+      <TextInput accessibilityLabel="Батьківський PIN" secureTextEntry keyboardType="number-pad" maxLength={4} value={pin} onChangeText={setPin} style={s.input} placeholder="4 цифри" />
+      <Button onPress={async () => {
+        if (!/^\d{4}$/.test(pin)) { setParentMsg('Введіть рівно 4 цифри.'); return; }
+        if (savedPin && savedPin !== pin) { setParentMsg('PIN не збігається.'); return; }
+        try { if (!savedPin) { await saveSettings({ pin }); setSavedPin(pin); } setUnlocked(true); setParentMsg(''); } catch { setParentMsg('Не вдалося зберегти PIN.'); }
+      }}>{savedPin ? 'Відкрити' : 'Зберегти PIN і відкрити'}</Button>
+      <Text style={s.error}>{parentMsg}</Text>
+    </View> : <>
+      <View style={s.card}>
+        <Text style={s.sectionTitle}>{prof.name} · {prof.age} років</Text>
+        <Text style={s.muted}>Інтерес: {prof.interest}. Пригод: {prof.completed}. Наліпок: {prof.stickers.length}/{STORIES.length}. Зірочок: {prof.stars}.</Text>
+        {(['reading', 'arithmetic'] as const).map(key => <View key={key} style={s.setting}>
+          <Text style={s.label}>{key === 'reading' ? 'Читання (розуміння)' : 'Математика (з першої спроби)'}</Text>
+          <Text style={s.muted}>{prof.record[key].correct} / {prof.record[key].attempts}{key === 'reading' ? ` · ${{ easy: 'Початковий', medium: 'Середній', hard: 'Складніший' }[nextDifficulty(prof.record.reading)]}` : ''}</Text>
+        </View>)}
+      </View>
+      <View style={s.card}>
+        <Text style={s.sectionTitle}>Рівень математики</Text>
+        <Text style={s.muted}>Рівень змінюється автоматично: 4 правильні з 5 — вище, 3 помилки з 4 — нижче. Можна обрати вручну.</Text>
+        {([1, 2, 3, 4, 5] as MathLevel[]).map(l => <Pressable key={l} accessibilityRole="button" onPress={() => update(old => ({ ...old, mathLevel: l, mathHistory: [] }))}
+          style={[s.setting, { alignItems: 'center' }, prof.mathLevel === l && { backgroundColor: '#EEF2E5', borderRadius: 12, paddingHorizontal: 10 }]}>
+          <View style={{ flex: 1, minWidth: 200 }}><Text style={s.label}>{prof.mathLevel === l ? '● ' : '○ '}{l}. {LEVELS[l].title}</Text><Text style={s.small}>{LEVELS[l].description}</Text></View>
+        </Pressable>)}
+      </View>
+      <View style={s.card}>
+        <Text style={s.sectionTitle}>Комфортне заняття</Text>
+        <Text style={s.label}>Нагадати про перерву після</Text>
+        <View style={s.chips}>{['10', '15', '20'].map(v => <Chip key={v} label={`${v} хв`} active={limit === v} onPress={() => setLimit(v)} />)}</View>
+        <Text style={s.label}>Озвучення завдань</Text>
+        <View style={s.chips}><Chip label="Увімкнено" active={sound} onPress={() => setSound(true)} /><Chip label="Вимкнено" active={!sound} onPress={() => setSound(false)} /></View>
+        <Button onPress={async () => { try { await saveSettings(); setParentMsg('Налаштування збережено.'); } catch { setParentMsg('Не вдалося зберегти.'); } }}>Зберегти налаштування</Button>
+        <Text style={s.muted}>{parentMsg}</Text>
+      </View>
+      <View style={s.card}>
+        <Text style={s.sectionTitle}>Що варто повторити</Text>
+        {prof.results.flatMap(r => r.errors).slice(0, 12).map((e, i) => <Text key={i} style={s.muted}>• {e}</Text>)}
+        {!prof.results.some(r => r.errors.length > 0) && <Text style={s.muted}>Помилок у завершених заняттях поки немає.</Text>}
+        <Button secondary onPress={() => begin('assessment')}>Пройти перевірку ще раз</Button>
+      </View>
+      <View style={s.card}>
+        <Text style={s.sectionTitle}>Пам’ять і голос</Text>
+        <Text style={s.muted}>Профіль та результати зберігаються лише на цьому пристрої. Це навчальні пригоди за готовими сюжетами. Вільний AI-діалог і синхронізація ще не підключені.</Text>
+        <Text style={s.muted}>Голосове розпізнавання працює у сумісному браузері та може використовувати сервіс виробника браузера. Застосунок не зберігає аудіозаписи.</Text>
+        <Button secondary onPress={() => {
+          if (!resetConfirm) { setResetConfirm(true); return; }
+          AsyncStorage.removeItem(PROFILE_KEY).then(() => { pRef.current = null; setP(null); setResetConfirm(false); navigate('home'); }).catch(() => setParentMsg('Не вдалося видалити профіль.'));
+        }}>{resetConfirm ? 'Підтвердити видалення профілю та результатів' : 'Очистити профіль на цьому пристрої'}</Button>
+        {resetConfirm && <Button secondary onPress={() => setResetConfirm(false)}>Скасувати</Button>}
+      </View>
+    </>}
+  </>;
+
+  const body = () => {
+    if (!p) return renderOnboarding();
+    switch (screen) {
+      case 'home': return renderHome(p);
+      case 'story': return <StoryPlayer key={story.id + (session?.startedAt ?? 0)} story={story} childName={p.name} level={p.mathLevel} readingLevel={rLevel} say={say} voice={voice}
+        onMath={recordMath} onRead={recordReading} onFinish={finish} onExit={back} onStep={scrollTop} />;
+      case 'math': return renderMath(p);
+      case 'assessment': return renderAssessment();
+      case 'reading': return renderReading();
+      case 'result': return renderResult(p);
+      case 'progress': return renderProgress(p);
+      case 'parents': return renderParents(p);
+    }
+  };
+
+  return <SafeAreaView style={s.page}><StatusBar style="dark" />
+    <View style={{ flex: 1, flexDirection: wide ? 'row' : 'column' }}>
+      <View style={[s.sidebar, !wide && s.mobileBar]}>
+        <View style={s.logo}><Text style={s.logoMark}>✦</Text><View><Text style={s.logoText}>казка</Text><Text style={s.logoSub}>ТВОЯ МАЛЕНЬКА ПРИГОДА</Text></View></View>
+        {wide && <>
+          <Text style={s.menuCaption}>ТВІЙ СВІТ</Text>
+          <Nav id="home" label="Мої пригоди" icon="⌂" />
+          <Nav id="progress" label="Мої відкриття" icon="✧" />
+          <View style={{ flex: 1 }} />
+          <View style={s.sideNote}><Text style={{ fontSize: 30 }}>🌱</Text><Text style={s.sideNoteTitle}>Маленькі кроки.</Text><Text style={s.muted}>Щодня дізнавайся щось нове, у своєму темпі.</Text></View>
+          <Nav id="parents" label="Для батьків" icon="⚙" />
+        </>}
+        {!wide && <Pressable accessibilityLabel="Для батьків" onPress={() => { setUnlocked(false); setPin(''); navigate('parents'); }}><Text style={{ fontSize: 24 }}>⚙</Text></Pressable>}
+      </View>
+      <ScrollView ref={scrollRef} style={{ flex: 1 }} contentContainerStyle={[s.content, { padding: wide ? 42 : 18 }]}>
+        <View style={s.topline}>
+          <Text style={s.eyebrow}>{learning ? 'ЧАС ДЛЯ ВІДКРИТТІВ' : 'МАЛЕНЬКІ ПРИГОДИ, ВЕЛИКІ ВІДКРИТТЯ'}</Text>
+          <Pressable accessibilityRole="button" onPress={() => { const v = !sound; setSound(v); Speech.stop(); saveSettings({ sound: v }).catch(() => undefined); }}>
+            <Text style={s.sound}>{sound ? '🔊 Звук увімкнено' : '🔈 Без звуку'}</Text>
+          </Pressable>
+        </View>
+        {body()}
+        {learning && session && Date.now() - session.startedAt > Number(limit) * 60000 && <View style={s.assessment}>
+          <Text style={[s.muted, { flex: 1 }]}>Час трохи відпочити. Збережені відповіді залишаться у твоєму прогресі.</Text>
+          <Button onPress={back}>Зробити перерву</Button>
+        </View>}
+        {!!voice.error && <Text accessibilityLiveRegion="polite" style={s.error}>{voice.error}</Text>}
+        {!!storageError && <Text style={s.error}>{storageError}</Text>}
+        <View style={s.footer}><Text style={s.footerLogo}>✦ казка</Text><Text style={s.small}>Тут можна помилятися. І пробувати знову.</Text></View>
+      </ScrollView>
+      {!wide && p && <View style={s.bottomNav}><Nav id="home" label="Пригоди" icon="⌂" /><Nav id="progress" label="Відкриття" icon="✧" /></View>}
+    </View>
+  </SafeAreaView>;
 }
-const s=StyleSheet.create({
- page:{flex:1,backgroundColor:'#FAF9F5'},loading:{padding:40,color:'#3E523E',fontSize:24},sidebar:{width:240,padding:25,backgroundColor:'#F1F2E9',borderRightWidth:1,borderColor:'#E6E7DE',gap:10},mobileBar:{width:'100%',flexDirection:'row',alignItems:'center',justifyContent:'space-between',padding:18,borderBottomWidth:1,borderRightWidth:0},logo:{flexDirection:'row',alignItems:'center',gap:10,marginBottom:20},logoMark:{fontSize:44,color:'#65794C'},logoText:{fontSize:34,fontWeight:'800',letterSpacing:-2,color:'#354C35'},logoSub:{fontSize:7,letterSpacing:1.4,color:'#7B836D'},menuCaption:{fontSize:10,letterSpacing:2,color:'#949A87',marginTop:32,marginBottom:12},navItem:{flexDirection:'row',alignItems:'center',gap:12,padding:14,borderRadius:14},navActive:{backgroundColor:'#E1E7D5'},navIcon:{fontSize:23,color:'#6F7E61'},navLabel:{fontSize:14,fontWeight:'600',color:'#7F8675'},sideNote:{padding:15,gap:10,marginBottom:22},sideNoteTitle:{fontSize:20,color:'#53664A',fontWeight:'600'},content:{maxWidth:1210,width:'100%',alignSelf:'center',gap:24,paddingBottom:24},topline:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'},eyebrow:{fontSize:10,fontWeight:'700',letterSpacing:1.6,color:'#8A917C'},sound:{fontSize:12,color:'#7F8775'},title:{fontSize:38,fontWeight:'700',letterSpacing:-1.4,color:'#344933',lineHeight:47},subtitle:{fontSize:16,lineHeight:25,color:'#8A8F7F',marginTop:7},greeting:{flexDirection:'row',justifyContent:'space-between',alignItems:'center'},avatar:{backgroundColor:'#F1E9D5',width:58,height:58,borderRadius:29,alignItems:'center',justifyContent:'center'},hero:{backgroundColor:'#E4EBCF',borderRadius:26,padding:32,overflow:'hidden',gap:10,minHeight:300},heroBadge:{fontSize:10,letterSpacing:1.8,color:'#697D4C',fontWeight:'700'},heroTitle:{fontSize:38,lineHeight:44,letterSpacing:-1.3,fontWeight:'700',color:'#354C30',maxWidth:380},heroCopy:{color:'#7D896A',fontSize:15,lineHeight:24},heroCTA:{backgroundColor:'#526C3D',borderRadius:13,padding:17,alignSelf:'flex-start'},heroCTAText:{color:'white',fontSize:14,fontWeight:'600'},heroMeta:{fontSize:11,color:'#8A9675'},heroArt:{alignItems:'center',justifyContent:'center',minWidth:220,flex:.8,minHeight:230},heroMoon:{fontSize:60,color:'#A8B786',position:'absolute',top:-5,right:0},artBubble:{backgroundColor:'#F7FAEB',paddingVertical:10,paddingHorizontal:16,borderRadius:20,transform:[{rotate:'-5deg'}]},sectionHead:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',marginTop:10},sectionTitle:{fontSize:21,fontWeight:'600',color:'#43543B',letterSpacing:-.4},row:{gap:18},practice:{flex:1,padding:24,borderRadius:20,gap:9},practiceTop:{flexDirection:'row',justifyContent:'space-between',marginBottom:15},practiceTitle:{fontSize:22,fontWeight:'600',color:'#48583E'},practiceMeta:{fontSize:9,letterSpacing:1.6,color:'#929681',marginTop:14},muted:{fontSize:14,lineHeight:23,color:'#858C7A'},world:{flex:1,padding:24,borderRadius:19,gap:12,minHeight:200},worldTag:{fontSize:9,fontWeight:'700',letterSpacing:1.2,marginTop:6},worldTitle:{fontSize:20,lineHeight:26,fontWeight:'600',color:'#3C503A'},daily:{flexDirection:'row',alignItems:'center',gap:15,padding:22,borderWidth:1,borderColor:'#E7E8DC',borderRadius:17},bold:{fontWeight:'700',color:'#5B704C'},footer:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',marginTop:22,paddingTop:20,borderTopWidth:1,borderColor:'#E9EAE1'},footerLogo:{fontSize:20,color:'#A0A68E',fontWeight:'600'},small:{fontSize:11,lineHeight:18,color:'#9AA08F'},card:{backgroundColor:'#FFFFFF',borderWidth:1,borderColor:'#E8EADF',borderRadius:22,padding:26,gap:18},welcomeArt:{backgroundColor:'#E5EBD6',borderRadius:26,alignItems:'center',justifyContent:'center',padding:35,minHeight:450},artStars:{fontSize:40,color:'#AEBB8D',marginBottom:20},artTitle:{fontSize:30,color:'#455C36',fontWeight:'700',marginTop:20},artCopy:{color:'#7E8B6C',fontSize:16,lineHeight:26,textAlign:'center',marginTop:16},button:{backgroundColor:'#526C3D',paddingHorizontal:22,paddingVertical:17,borderRadius:14,alignItems:'center',justifyContent:'center'},buttonText:{fontSize:15,color:'#FFFFFF',fontWeight:'600'},secondary:{backgroundColor:'#F0F3E9',borderWidth:1,borderColor:'#E5E9DB'},secondaryText:{color:'#62764E'},input:{borderWidth:1,borderColor:'#DDE2D3',backgroundColor:'#FBFCF8',padding:16,borderRadius:13,fontSize:18,color:'#3F5435'},label:{fontSize:14,fontWeight:'600',color:'#5F7050'},chips:{flexDirection:'row',flexWrap:'wrap',gap:8},chip:{padding:13,borderRadius:12,backgroundColor:'#F1F3EA',minWidth:42,alignItems:'center'},chipSelected:{backgroundColor:'#627A4B'},assessment:{backgroundColor:'#F8F1DF',borderRadius:18,padding:22,flexDirection:'row',alignItems:'center',flexWrap:'wrap',gap:18},lesson:{maxWidth:690,width:'100%',alignSelf:'center',gap:23,paddingVertical:16},lessonIcon:{fontSize:62,textAlign:'center',marginTop:15},back:{fontSize:14,color:'#839274'},storyText:{fontSize:22,lineHeight:36,color:'#657258'},mathBoard:{padding:30,borderRadius:22,backgroundColor:'#F0EDDF',gap:16,alignItems:'center'},equation:{fontSize:43,fontWeight:'600',color:'#52683F',textAlign:'center'},feedback:{fontSize:16,lineHeight:26,color:'#647653'},progressTrack:{height:6,borderRadius:3,backgroundColor:'#E7EBDC',overflow:'hidden'},progressFill:{height:6,backgroundColor:'#879E67'},readingBoard:{padding:28,backgroundColor:'#FFFDF5',borderRadius:20,borderWidth:1,borderColor:'#EAE6D6'},readingText:{fontSize:29,lineHeight:46,color:'#45563B',letterSpacing:.5},timer:{fontSize:22,color:'#8C977F',textAlign:'center',fontVariant:['tabular-nums']},stats:{backgroundColor:'#EEF2E5',borderRadius:20,padding:26,flexDirection:'row',justifyContent:'space-around',gap:25,flexWrap:'wrap',marginVertical:12},statNumber:{fontSize:38,fontWeight:'600',color:'#607948',textAlign:'center'},history:{backgroundColor:'#FFFFFF',padding:22,borderRadius:16,borderWidth:1,borderColor:'#E9EBE1',flexDirection:'row',alignItems:'center',gap:18},historyTitle:{fontSize:17,color:'#526548',fontWeight:'600',marginBottom:3},setting:{flexDirection:'row',justifyContent:'space-between',gap:12,flexWrap:'wrap',paddingVertical:10,borderBottomWidth:1,borderColor:'#EEF0E7'},error:{fontSize:14,lineHeight:23,color:'#A15F45'},bottomNav:{flexDirection:'row',justifyContent:'space-around',backgroundColor:'#F1F2E9',borderTopWidth:1,borderColor:'#E6E7DE',padding:6}
-});
