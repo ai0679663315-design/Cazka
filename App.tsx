@@ -12,9 +12,12 @@ import { Button, Celebrate, ExitLink, MathCard, ReadingCard, Tone } from './src/
 import { hasUkrainianVoice, playTone, unlockOnFirstTouch } from './src/webExtras';
 import { VoiceInfo, configureSpeech, currentVoice, loadVoices, speak } from './src/speech';
 import { StoryPlayer } from './src/StoryPlayer';
+import { DrawStudio, DrawingView } from './src/Draw';
+import { PianoStudio } from './src/Piano';
+import { Drawing, loadDrawings, saveDrawings, upsert } from './src/drawing';
 import { s } from './src/theme';
 
-type Screen = 'home' | 'story' | 'math' | 'reading' | 'assessment' | 'result' | 'progress' | 'parents';
+type Screen = 'home' | 'story' | 'math' | 'reading' | 'assessment' | 'result' | 'progress' | 'parents' | 'draw' | 'piano';
 type Session = {
   kind: ResultKind; storyId?: string; correct: number; total: number; errors: string[];
   stars: number; mathCorrect: number; streak: number; wpm?: number; startedAt: number;
@@ -41,6 +44,7 @@ export default function App() {
   const [sound, setSound] = useState(true);
   const [storageError, setStorageError] = useState('');
   const [ukVoice, setUkVoice] = useState<boolean | null>(null);
+  const [drawings, setDrawings] = useState<Drawing[]>([]);
   const [voices, setVoices] = useState<VoiceInfo[]>([]);
   const [voiceId, setVoiceId] = useState<string | undefined>();
   const [rate, setRate] = useState('0.95');
@@ -89,6 +93,7 @@ export default function App() {
       loadVoices().then(list => { setVoices(list); setVoiceId(id => id ?? currentVoice()?.id); }).catch(() => undefined);
     })();
     unlockOnFirstTouch();
+    loadDrawings().then(setDrawings).catch(() => undefined);
     hasUkrainianVoice().then(setUkVoice).catch(() => setUkVoice(null));
     return () => { Speech.stop(); };
   }, []);
@@ -96,6 +101,17 @@ export default function App() {
   const say = (text: string, mood?: 'calm' | 'happy') => { if (!sound) return; voice.stop(); speak(text, mood); };
   const SAMPLE = 'Привіт! Я лисеня Руді. Давай порахуємо разом: дві кульки і ще три кульки, це п’ять кульок. Молодець!';
   const tone: Tone = kind => { if (sound) playTone(kind); };
+  const addStars = (n: number) => { update(old => ({ ...old, stars: old.stars + n })); };
+  const saveDrawing = (d: Drawing) => {
+    setDrawings(list => {
+      const isNew = !list.some(x => x.id === d.id);
+      if (isNew) addStars(1);
+      const next = upsert(list, d);
+      saveDrawings(next).catch(() => setStorageError('Не вдалося зберегти малюнок: можливо, на пристрої закінчилось місце.'));
+      return next;
+    });
+  };
+  const deleteDrawing = (id: string) => setDrawings(list => { const next = list.filter(x => x.id !== id); saveDrawings(next).catch(() => undefined); return next; });
   const navigate = (next: Screen) => { Speech.stop(); voice.stop(); setScreen(next); scrollTop(); };
 
   // ---------- заняття ----------
@@ -162,9 +178,10 @@ export default function App() {
   // ---------- маленькі частини інтерфейсу ----------
   const VoiceButton = ({ onResult }: { onResult: (t: string) => void }) =>
     <Button secondary onPress={() => { Speech.stop(); voice.listening ? voice.stop() : voice.listen(onResult); }}>{voice.listening ? '◼ Зупинити запис' : '🎤 Сказати голосом'}</Button>;
-  const Nav = ({ id, label, icon }: { id: Screen; label: string; icon: string }) =>
-    <Pressable accessibilityRole="button" onPress={() => { if (id === 'parents') { setUnlocked(false); setPin(''); setParentMsg(''); } navigate(id); }} style={[s.navItem, screen === id && s.navActive]}>
-      <Text style={s.navIcon}>{icon}</Text><Text style={[s.navLabel, screen === id && { color: '#3B533D' }]}>{label}</Text>
+  const Nav = ({ id, label, icon, compact = false }: { id: Screen; label: string; icon: string; compact?: boolean }) =>
+    <Pressable accessibilityRole="button" onPress={() => { if (id === 'parents') { setUnlocked(false); setPin(''); setParentMsg(''); } navigate(id); }}
+      style={[s.navItem, compact && { flex: 1, flexDirection: 'column', gap: 2, padding: 8, alignItems: 'center' }, screen === id && s.navActive]}>
+      <Text style={s.navIcon}>{icon}</Text><Text style={[s.navLabel, compact && { fontSize: 12 }, screen === id && { color: '#3B533D' }]}>{label}</Text>
     </Pressable>;
   const Chip = ({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) =>
     <Pressable accessibilityRole="button" onPress={onPress} style={[s.chip, active && s.chipSelected]}><Text style={active ? { color: 'white' } : { color: '#515C4B' }}>{label}</Text></Pressable>;
@@ -247,7 +264,7 @@ export default function App() {
         <Text style={s.heroTitle}>{next.name}</Text>
         <Text style={s.heroCopy}>{next.blurb} Тебе чекають вибір шляху, задачки й таємна записка.</Text>
         <View style={s.heroCTA}><Text style={s.heroCTAText}>Вирушити у пригоду   →</Text></View>
-        <Text style={s.heroMeta}>◷  7–10 хвилин   ·   7 кроків   ·   нагорода: наліпка {next.sticker.emoji}</Text>
+        <Text style={s.heroMeta}>◷  7–10 хвилин   ·   {next.scenes.length} кроків   ·   нагорода: наліпка {next.sticker.emoji}</Text>
       </View>
       <View style={s.heroArt}>
         <Text style={s.heroMoon}>✧</Text>
@@ -256,6 +273,22 @@ export default function App() {
         <View style={s.artBubble}><Text style={{ color: '#52624A' }}>Ходімо зі мною!</Text></View>
       </View>
     </Pressable>
+
+    <View style={s.sectionHead}><Text style={s.sectionTitle}>Творча студія</Text><Text style={s.muted}>Грай і малюй</Text></View>
+    <View style={[s.row, { flexDirection: roomy ? 'row' : 'column' }]}>
+      <Pressable accessibilityRole="button" onPress={() => navigate('draw')} style={[s.practice, { backgroundColor: '#FCEFE3' }]}>
+        <View style={s.practiceTop}><Text style={{ fontSize: 38 }}>🎨</Text><Text style={{ fontSize: 24, color: '#6B735F' }}>↗</Text></View>
+        <Text style={s.practiceTitle}>Малювалка</Text>
+        <Text style={s.muted}>Фарби, штампи й розмальовки. Малюнки зберігаються в альбом.</Text>
+        <Text style={s.practiceMeta}>{drawings.length ? `У АЛЬБОМІ: ${drawings.length}` : 'НАМАЛЮЙ ПЕРШИЙ МАЛЮНОК'}</Text>
+      </Pressable>
+      <Pressable accessibilityRole="button" onPress={() => navigate('piano')} style={[s.practice, { backgroundColor: '#F1E9F7' }]}>
+        <View style={s.practiceTop}><Text style={{ fontSize: 38 }}>🎹</Text><Text style={{ fontSize: 24, color: '#6B735F' }}>↗</Text></View>
+        <Text style={s.practiceTitle}>Піаніно</Text>
+        <Text style={s.muted}>Вільна гра, пісеньки за підсвіченими клавішами та гра «Повторюй за мною».</Text>
+        <Text style={s.practiceMeta}>5 ПІСЕНЬОК · ДО РЕ МІ</Text>
+      </Pressable>
+    </View>
 
     <View style={s.sectionHead}><Text style={s.sectionTitle}>Маленька практика</Text><Text style={s.muted}>У своєму темпі</Text></View>
     <View style={[s.row, { flexDirection: roomy ? 'row' : 'column' }]}>
@@ -364,6 +397,12 @@ export default function App() {
       {[{ n: `⭐ ${prof.stars}`, t: 'зірочок' }, { n: prof.completed, t: 'пригод завершено' }, { n: prof.record.arithmetic.correct, t: 'прикладів розв’язано' }, { n: prof.record.reading.correct, t: 'текстів зрозуміло' }]
         .map(x => <View key={x.t}><Text style={s.statNumber}>{x.n}</Text><Text style={s.muted}>{x.t}</Text></View>)}
     </View>
+    {drawings.length > 0 && <>
+      <View style={s.sectionHead}><Text style={s.sectionTitle}>Мої малюнки 🎨</Text><Pressable onPress={() => navigate('draw')}><Text style={s.muted}>Відкрити Малювалку →</Text></Pressable></View>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
+        {drawings.slice(0, 8).map(d => <View key={d.id} style={{ borderRadius: 14, overflow: 'hidden', borderWidth: 2, borderColor: '#E3E5DA' }}><DrawingView items={d.items} template={d.template} width={140} /></View>)}
+      </View>
+    </>}
     <View style={s.sectionHead}><Text style={s.sectionTitle}>Альбом наліпок 🏅</Text><Text style={s.muted}>{prof.stickers.length} з {STORIES.length}</Text></View>
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
       {STORIES.map(st => {
@@ -466,7 +505,9 @@ export default function App() {
     switch (screen) {
       case 'home': return renderHome(p);
       case 'story': return <StoryPlayer key={story.id + (session?.startedAt ?? 0)} story={story} childName={p.name} level={p.mathLevel} readingLevel={rLevel} say={say} tone={tone} voice={voice}
-        onMath={recordMath} onRead={recordReading} onFinish={finish} onExit={back} onStep={scrollTop} />;
+        onMath={recordMath} onRead={recordReading} onFinish={finish} onExit={back} onStep={scrollTop} onDrawing={saveDrawing} />;
+      case 'draw': return <DrawStudio drawings={drawings} say={say} onSave={saveDrawing} onDelete={deleteDrawing} />;
+      case 'piano': return <PianoStudio say={say} tone={tone} onStar={addStars} />;
       case 'math': return renderMath(p);
       case 'assessment': return renderAssessment();
       case 'reading': return renderReading();
@@ -483,6 +524,8 @@ export default function App() {
         {wide && <>
           <Text style={s.menuCaption}>ТВІЙ СВІТ</Text>
           <Nav id="home" label="Мої пригоди" icon="⌂" />
+          <Nav id="draw" label="Малювалка" icon="🎨" />
+          <Nav id="piano" label="Піаніно" icon="🎹" />
           <Nav id="progress" label="Мої відкриття" icon="✧" />
           <View style={{ flex: 1 }} />
           <View style={s.sideNote}><Text style={{ fontSize: 30 }}>🌱</Text><Text style={s.sideNoteTitle}>Маленькі кроки.</Text><Text style={s.muted}>Щодня дізнавайся щось нове, у своєму темпі.</Text></View>
@@ -506,7 +549,7 @@ export default function App() {
         {!!storageError && <Text style={s.error}>{storageError}</Text>}
         <View style={s.footer}><Text style={s.footerLogo}>✦ казка</Text><Text style={s.small}>Тут можна помилятися. І пробувати знову.</Text></View>
       </ScrollView>
-      {!wide && p && <View style={s.bottomNav}><Nav id="home" label="Пригоди" icon="⌂" /><Nav id="progress" label="Відкриття" icon="✧" /></View>}
+      {!wide && p && <View style={s.bottomNav}><Nav compact id="home" label="Пригоди" icon="⌂" /><Nav compact id="draw" label="Малюю" icon="🎨" /><Nav compact id="piano" label="Піаніно" icon="🎹" /><Nav compact id="progress" label="Відкриття" icon="✧" /></View>}
     </View>
   </SafeAreaView>;
 }

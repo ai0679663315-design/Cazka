@@ -64,3 +64,31 @@ export function hasUkrainianVoice(): Promise<boolean | null> {
     setTimeout(done, 1500);
   });
 }
+
+/**
+ * Звук фортепіано без аудіофайлів: основний тон + обертони, швидка атака й природне згасання.
+ * Вищі ноти згасають швидше — як у справжнього інструмента.
+ */
+export function playPianoNote(freq: number, seconds = 1.6) {
+  const c = audio(); if (!c) return;
+  try {
+    const t = c.currentTime;
+    const decay = Math.max(0.6, seconds * (440 / Math.max(freq, 220)) ** 0.5);
+    const master = c.createGain();
+    const filter = c.createBiquadFilter();
+    filter.type = 'lowpass'; filter.frequency.setValueAtTime(Math.min(8000, freq * 8), t);
+    filter.frequency.exponentialRampToValueAtTime(Math.max(400, freq * 2), t + decay);
+    master.gain.setValueAtTime(0.0001, t);
+    master.gain.exponentialRampToValueAtTime(0.32, t + 0.008);
+    master.gain.exponentialRampToValueAtTime(0.12, t + 0.25);
+    master.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+    filter.connect(master); master.connect(c.destination);
+    ([[1, 'triangle', 0.6], [2, 'sine', 0.25], [3, 'sine', 0.1], [4, 'sine', 0.05]] as [number, OscillatorType, number][]).forEach(([mult, type, vol]) => {
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = type; o.frequency.value = freq * mult; o.detune.value = (mult - 1) * 2;
+      g.gain.value = vol;
+      o.connect(g); g.connect(filter);
+      o.start(t); o.stop(t + decay + 0.1);
+    });
+  } catch { /* звук — бонус */ }
+}

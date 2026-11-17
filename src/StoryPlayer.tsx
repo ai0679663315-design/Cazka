@@ -4,8 +4,12 @@ import { s } from './theme';
 import { Button, ExitLink, MathCard, PathProgress, ReadingCard, Say, Tone, Voice, k } from './components';
 import { Story, fillName } from './stories';
 import { MathLevel, MathTask, makeTask } from './math';
+import { MelodyTask } from './Piano';
+import { DrawPad } from './Draw';
+import { Drawing } from './drawing';
+import { parseSong } from './piano';
 
-const SCENE_ICON = { say: '✨', choice: '🔀', math: '🔢', read: '📖' } as const;
+const SCENE_ICON = { say: '✨', choice: '🔀', math: '🔢', read: '📖', piano: '🎹', draw: '🎨' } as const;
 
 /** Створює задачу-розповідь для сцени пригоди з урахуванням рівня дитини. */
 export function storyTask(level: MathLevel, scene: Extract<Story['scenes'][number], { type: 'math' }>, rng = Math.random): MathTask {
@@ -14,11 +18,11 @@ export function storyTask(level: MathLevel, scene: Extract<Story['scenes'][numbe
   return makeTask(level, rng, { kind, noun: scene.noun, templates: scene.templates });
 }
 
-export function StoryPlayer({ story, childName, level, readingLevel, say, tone, voice, onMath, onRead, onFinish, onExit, onStep }: {
+export function StoryPlayer({ story, childName, level, readingLevel, say, tone, voice, onMath, onRead, onFinish, onExit, onStep, onDrawing }: {
   story: Story; childName: string; level: MathLevel; readingLevel: 0 | 1 | 2; say: Say; tone: Tone; voice: Voice;
   onMath: (task: MathTask, firstTryOk: boolean, given: string) => void;
   onRead: (ok: boolean, label: string, wpm?: number) => void;
-  onFinish: (choice: string) => void; onExit: () => void; onStep?: () => void;
+  onFinish: (choice: string) => void; onExit: () => void; onStep?: () => void; onDrawing?: (d: Drawing) => void;
 }) {
   const [index, setIndex] = useState(0);
   const [choice, setChoice] = useState<{ keep: string; reply: string; emoji: string } | null>(null);
@@ -30,7 +34,7 @@ export function StoryPlayer({ story, childName, level, readingLevel, say, tone, 
     if (scene.type === 'math') setTask(storyTask(level, scene));
     else setTask(null);
     if (scene.type === 'say' || scene.type === 'choice') say(text);
-    if (scene.type === 'read') say(text);
+    if (scene.type === 'read' || scene.type === 'piano' || scene.type === 'draw') say(text);
   }, [index]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const next = () => {
@@ -78,6 +82,19 @@ export function StoryPlayer({ story, childName, level, readingLevel, say, tone, 
         <MathCard key={task.id} task={task} say={say} tone={tone} voice={voice}
           onResolved={(ok, given) => onMath(task, ok, given)} onNext={next}
           nextLabel={index + 1 >= story.scenes.length ? 'Завершити пригоду 🏁' : 'Далі →'} />
+      </>}
+
+      {scene.type === 'piano' && <>
+        <Text style={[s.subtitle, { fontSize: 18 }]}>{text}</Text>
+        <MelodyTask key={index} notes={parseSong(scene.melody)} say={say} tone={tone} onDone={next}
+          doneLabel={index + 1 >= story.scenes.length ? 'Завершити пригоду 🏁' : 'Далі →'} />
+      </>}
+
+      {scene.type === 'draw' && <>
+        <Text style={[s.subtitle, { fontSize: 18 }]}>{text}</Text>
+        <DrawPad key={index} template={scene.template} say={say} compact doneLabel="✓ Готово! Повісити афішу"
+          onSave={d => { onDrawing?.(d); tone('good'); setTimeout(next, 900); }} />
+        <Button secondary onPress={next}>Пропустити малювання →</Button>
       </>}
 
       {scene.type === 'read' && <>
